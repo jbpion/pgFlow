@@ -1,2 +1,2 @@
 # pgFlow
-A library for making data transformations easier in native Postgres.
+A declarative dataflow engine for PostgreSQL
