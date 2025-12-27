@@ -1,0 +1,44 @@
+name: 'pgFlow Build'
+description: 'Build pgFlow SQL artifact for deployment'
+branding:
+  icon: 'package'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Version string for the artifact'
+    required: false
+    default: 'dev'
+  output-dir:
+    description: 'Output directory for artifacts'
+    required: false
+    default: 'dist'
+
+outputs:
+  artifact-path:
+    description: 'Path to the generated SQL artifact'
+    value: ${{ steps.build.outputs.artifact-path }}
+  artifact-name:
+    description: 'Name of the generated SQL artifact'
+    value: ${{ steps.build.outputs.artifact-name }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Build pgFlow artifact
+      id: build
+      shell: bash
+      run: |
+        version="${{ inputs.version }}"
+        output_dir="${{ inputs.output-dir }}"
+        
+        echo "Building pgFlow artifact version: $version"
+        
+        chmod +x ${{ github.action_path }}/build-artifact.sh
+        ${{ github.action_path }}/build-artifact.sh "$version" "$output_dir"
+        
+        artifact_path="$output_dir/pgflow-$version.sql"
+        artifact_name="pgflow-$version.sql"
+        
+        echo "artifact-path=$artifact_path" >> $GITHUB_OUTPUT
+        echo "artifact-name=$artifact_name" >> $GITHUB_OUTPUT
