@@ -9,56 +9,18 @@ language plpgsql
 as $body$
 declare
     v_sql text;
-    v_compiled_sql text;
     v_key text;
     v_value text;
     v_current_date text;
 begin
-    -- Get the compiled SQL for the pipeline
-    -- For now, recompile from steps. Later we can cache compiled SQL in pipeline table.
-    select string_agg(
-        format(
-            'SELECT * FROM (%s) t%s',
-            step_spec::text,
-            step_order
-        ),
-        E'\nUNION ALL\n'
-        order by s.step_order
-    )
-    into v_compiled_sql
-    from flow.pipeline p
-    join flow.pipeline_step s on s.pipeline_id = p.pipeline_id
-    where p.pipeline_name = run.pipeline_name;
+    -- Load the pre-compiled SQL from the pipeline table
+    select compiled_sql into v_sql
+    from flow.pipeline
+    where flow.pipeline.pipeline_name = run.pipeline_name;
 
-    if v_compiled_sql is null then
-        raise exception 'Pipeline "%" not found', pipeline_name;
+    if v_sql is null then
+        raise exception 'Pipeline "%" not found or has no compiled SQL. Re-register the pipeline.', pipeline_name;
     end if;
-
-    -- For now, recompile the pipeline from registered steps
-    -- Load steps into temp table
-    perform flow.__ensure_session_steps();
-    truncate table __session_steps;
-
-    insert into __session_steps (
-        step_order,
-        step_type,
-        step_name,
-        program_call,
-        step_spec
-    )
-    select
-        s.step_order,
-        s.step_type,
-        s.step_name,
-        s.program_call,
-        s.step_spec
-    from flow.pipeline p
-    join flow.pipeline_step s on s.pipeline_id = p.pipeline_id
-    where p.pipeline_name = run.pipeline_name
-    order by s.step_order;
-
-    -- Compile the SQL
-    v_sql := flow.compile();
 
     -- Apply variable substitution
     -- Built-in tokens

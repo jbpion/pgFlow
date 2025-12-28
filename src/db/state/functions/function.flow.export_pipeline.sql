@@ -27,6 +27,8 @@ begin
 -- Pipeline: %s
 -- Version: %s
 -- Exported: %s
+-- Description: %s
+-- Variables: %s
 -- ============================================================================
 -- This script safely upserts the pipeline definition.
 -- Safe to run multiple times (idempotent).
@@ -38,36 +40,44 @@ BEGIN;
 INSERT INTO flow.pipeline (
     pipeline_name,
     description,
+    compiled_sql,
     variables,
     version,
-    created_at
+    created_at,
+    updated_at
 )
 VALUES (
     %L,
     %L,
+    %L,
     %L::jsonb,
     %L,
+    CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
 )
 ON CONFLICT (pipeline_name) 
 DO UPDATE SET
     description = EXCLUDED.description,
+    compiled_sql = EXCLUDED.compiled_sql,
     variables = EXCLUDED.variables,
     version = EXCLUDED.version,
     updated_at = CURRENT_TIMESTAMP;
 
 -- Delete existing steps (will be replaced)
 DELETE FROM flow.pipeline_step
-WHERE pipeline_name = %L;
+WHERE pipeline_id = (SELECT pipeline_id FROM flow.pipeline WHERE pipeline_name = %L);
 
 $template$,
         p_pipeline_name,
-        p_version,
+        coalesce(v_pipeline.version, p_version),
         to_char(current_timestamp, 'YYYY-MM-DD HH24:MI:SS'),
+        coalesce(v_pipeline.description, ''),
+        coalesce(v_pipeline.variables::text, 'null'),
         p_pipeline_name,
         v_pipeline.description,
+        v_pipeline.compiled_sql,
         coalesce(v_pipeline.variables::text, 'null'),
-        p_version,
+        coalesce(v_pipeline.version, p_version),
         p_pipeline_name
     );
     
@@ -75,7 +85,7 @@ $template$,
     for v_step in
         select *
         from flow.pipeline_step
-        where pipeline_name = p_pipeline_name
+        where pipeline_id = v_pipeline.pipeline_id
         order by step_order
     loop
         v_step_count := v_step_count + 1;
@@ -83,15 +93,17 @@ $template$,
         v_steps_sql := v_steps_sql || format($template$
 -- Step %s: %s (%s)
 INSERT INTO flow.pipeline_step (
-    pipeline_name,
+    pipeline_id,
     step_order,
     step_type,
     step_name,
+    program_call,
     step_spec
 )
 VALUES (
-    %L,
+    (SELECT pipeline_id FROM flow.pipeline WHERE pipeline_name = %L),
     %s,
+    %L,
     %L,
     %L,
     %L::jsonb
@@ -105,6 +117,7 @@ $template$,
             v_step.step_order,
             v_step.step_type,
             v_step.step_name,
+            v_step.program_call,
             v_step.step_spec::text
         );
     end loop;
@@ -122,20 +135,22 @@ COMMIT;
 
 -- Verify deployment
 SELECT 
-    'Pipeline deployed: ' || pipeline_name || ' v' || version || ' (' || 
-    (SELECT count(*) FROM flow.pipeline_step WHERE pipeline_name = %L) || ' steps)' as status
-FROM flow.pipeline
+    'Pipeline deployed: ' || pipeline_name || ' v' || coalesce(version, '(no version)') || ' (' || 
+    (SELECT count(*) FROM flow.pipeline_step WHERE pipeline_id = p.pipeline_id) || ' steps)' as status
+FROM flow.pipeline p
 WHERE pipeline_name = %L;
 
 $template$,
         v_step_count,
-        p_pipeline_name,
         p_pipeline_name
     );
+    
+    -- Print the exported SQL to the console
+    raise notice '%', v_sql;
     
     return v_sql;
 end;
 $body$;
 
 comment on function flow.export_pipeline(text, text) is 
-'Export a registered pipeline as deployable SQL script. Returns SQL that safely upserts the pipeline definition with version tracking. Safe to include in migration scripts.';
+'Export a registered pipeline as deployable SQL script. Returns SQL that safely upserts the pipeline definition with version tracking. Safe to include in migration scripts. Also prints the SQL to the console via RAISE NOTICE.';

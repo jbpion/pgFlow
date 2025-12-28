@@ -9,7 +9,6 @@ create table if not exists flow.pipeline_step (
     program_call     text not null,  -- e.g. flow.select('s1', ...)
     step_spec        jsonb not null,  -- canonical AST node
 
-    compiled_sql     text,           -- filled by compiler
     created_at       timestamptz default now(),
 
     unique (pipeline_id, step_order)
