@@ -1,0 +1,64 @@
+name: Build and Release pgFlow
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building pgFlow version $VERSION"
+
+      - name: Ensure scripts are executable
+        run: chmod +x *.sh
+
+      - name: Build artifact
+        run: |
+          make build VERSION=${{ steps.version.outputs.version }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: pgFlow v${{ steps.version.outputs.version }}
+          tag_name: v${{ steps.version.outputs.version }}
+          files: dist/pgflow-${{ steps.version.outputs.version }}.sql
+          body: |
+            ## pgFlow v${{ steps.version.outputs.version }}
+
+            PostgreSQL-native data pipeline framework.
+
+            ### Installation
+
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/pgflow-${{ steps.version.outputs.version }}.sql
+            ```
+
+            ```bash
+            psql -h <host> -U <user> -d <database> \
+              -f pgflow-${{ steps.version.outputs.version }}.sql
+            ```
+
+            ### Upgrading
+
+            pgFlow is idempotent — re-running the installer is safe.
+
+            ### Documentation
+
+            See the README for usage examples and DSL documentation.
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
