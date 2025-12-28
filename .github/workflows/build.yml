@@ -41,6 +41,33 @@ jobs:
       - name: Build artifacts
         run: make build
 
+      - name: Find built SQL artifact and create stable copy
+        id: find_sql
+        run: |
+          set -euo pipefail
+
+          if [ -f dist/pgflow.sql ]; then
+            FILE=dist/pgflow.sql
+          else
+            FILE=$(ls -t dist/*pgflow*.sql 2>/dev/null | head -n1 || true)
+            if [ -z "$FILE" ]; then
+              FILE=$(ls -t dist/*.sql 2>/dev/null | head -n1 || true)
+            fi
+          fi
+
+          if [ -z "${FILE:-}" ]; then
+            echo "No SQL artifact found in dist/ — failing the job." >&2
+            exit 1
+          fi
+
+          echo "Found SQL artifact: $FILE"
+          echo "sql_file=$FILE" >> "$GITHUB_OUTPUT"
+
+          mkdir -p dist
+          # Copy to a canonical filename (more portable than a symlink)
+          cp -a "$FILE" dist/pgflow.sql
+          echo "Copied $FILE -> dist/pgflow.sql"
+
       - name: Smoke test install
         env:
           PGPASSWORD: postgres
