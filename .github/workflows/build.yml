@@ -1,5 +1,8 @@
 name: Build and Release pgFlow
 
+permissions:
+  contents: write
+
 on:
   push:
     branches:
@@ -40,6 +43,19 @@ jobs:
 
       - name: Ensure scripts are executable
         run: chmod +x *.sh
+
+      - name: Set version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+          VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION"
 
       - name: Build artifacts
         run: make build
