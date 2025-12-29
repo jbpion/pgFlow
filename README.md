@@ -2,7 +2,7 @@
 
 **Flow** is a PostgreSQL-native, developer-friendly framework for building **explicit, inspectable data pipelines** directly inside the database.
 
-It provides a small set of composable, user-facing functions (`read`, `select`, `lookup`, etc.) that record intent, compile deterministic SQL, and execute it in a controlled, debuggable way—without hiding what the database is doing.
+It provides a small set of composable, user-facing functions (`read`, `select`, `lookup`, etc.) that record intent, compile deterministic SQL, and execute it in a controlled way—without hiding what the database is doing.
 
 Flow is designed for **ease of implementation of data transformations, especially in an environment of high requirements churn**.
 
@@ -14,7 +14,7 @@ Modern data systems often suffer from one or more of the following:
 
 - Transformations embedded in layers of views  
 - ETL frameworks that obscure the final SQL  
-- Difficult-to-debug pipelines with no intermediate state  
+- Difficult-to-review pipelines with no intermediate state  
 
 Flow addresses this by:
 
@@ -105,13 +105,14 @@ Minimal Example
 ---------------
 ```sql
 -- Extract soruce data
-SELECT flow.read('staging.orders');
+SELECT flow.read_db_object('staging.orders');
 
 -- Transform
+--Use the ":" to alias columns.
 SELECT flow.select(
-  'order_id',
-  'customer_id',
-  'amount * tax_rate AS total_amount'
+  'order_id:order_key',
+  'customer_id:customer_key',
+  'amount * tax_rate:total_amount'
 );
 
 -- Write the result to a target table.
@@ -138,9 +139,9 @@ At any point, you can inspect session state or compiled output.
 Design Principles
 -----------------
 
-### ✔ PostgreSQL First
+### PostgreSQL First
 
-Flow embraces Postgres features:
+Flow uses native Postgres features:
 
 -   Temporary tables
 
@@ -154,7 +155,7 @@ No DSL outside SQL. No YAML. No Python runtime.
 
 * * * * *
 
-### ✔ Minimal Surface Area
+### Minimal Surface Area
 
 Only a few primitives exist initially:
 
@@ -172,7 +173,7 @@ Power comes from composition, not feature count.
 
 * * * * *
 
-### ✔ Inspectability Over Convenience
+### Inspectability Over Convenience
 
 You should always be able to answer:
 
@@ -186,33 +187,8 @@ Flow optimizes for **understanding first**, performance second.
 
 * * * * *
 
-### ✔ Extensible by Design
+### Installation
+Got to the [releases ](https://github.com/jbpion/pgFlow/releases/) and follow the installation instructions.
 
-The internal compiler is intentionally structured to support:
-
--   Smarter query rewrites
-
--   Cost-based optimizations
-
--   Pushdown rules
-
--   Specialized extensions
-
-These can evolve without changing user-facing APIs.
-
-* * * * *
-
-What Flow Is Not (Yet)
-----------------------
-
--   ❌ A workflow scheduler
-
--   ❌ A streaming engine
-
--   ❌ A replacement for dbt
-
--   ❌ An orchestration framework
-
-Flow focuses narrowly on **in-database transformation logic**.
-
-* * * * *
+### Upgrading
+pgFlow is idempotent — re-running the installer is safe.
