@@ -38,6 +38,9 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get install -y postgresql-client make
 
+      - name: Ensure scripts are executable
+        run: chmod +x *.sh
+
       - name: Build artifacts
         run: make build
 
