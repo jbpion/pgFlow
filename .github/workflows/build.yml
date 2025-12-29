@@ -93,8 +93,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/pgflow.sql
-            extension/pgflow--0.1.0.sql
-            extension/pgflow.control
+            dist/pgflow-${{ steps.version.outputs.version }}.sql
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
