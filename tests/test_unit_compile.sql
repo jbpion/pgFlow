@@ -375,11 +375,11 @@ SELECT ok(
 SELECT test_helpers.reset_flow_session();
 SELECT flow.read_db_object('pg_temp.test_orders');
 SELECT flow.select('order_id', 'amount');
-SELECT flow.write('src', 'pg_temp.test_output', 'create');
+SELECT flow.write('pg_temp.test_output', auto_create => true);
 
 SELECT ok(
-    test_helpers.sql_contains(flow.compile(), 'CREATE TABLE pg_temp.test_output AS'),
-    'Write CREATE: CREATE TABLE AS generated'
+    test_helpers.sql_contains(flow.compile(), 'CREATE TABLE IF NOT EXISTS pg_temp.test_output AS'),
+    'Write CREATE: CREATE TABLE IF NOT EXISTS generated'
 );
 
 -- ============================================================================

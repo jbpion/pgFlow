@@ -233,10 +233,13 @@ begin
             when 'write' then
                 v_write_target := v_step.step_spec->>'target_table';
                 v_write_mode := v_step.step_spec->>'mode';
-                v_write_unique_keys := (
-                    select array_agg(value::text)
-                    from jsonb_array_elements_text(v_step.step_spec->'unique_keys')
-                );
+                v_write_unique_keys := 
+                    case 
+                        when jsonb_typeof(v_step.step_spec->'unique_keys') = 'array' then
+                            (select array_agg(value::text)
+                             from jsonb_array_elements_text(v_step.step_spec->'unique_keys'))
+                        else null
+                    end;
                 v_write_auto_create := coalesce((v_step.step_spec->>'auto_create')::boolean, false);
                 v_write_truncate := coalesce((v_step.step_spec->>'truncate_before')::boolean, false);
 
