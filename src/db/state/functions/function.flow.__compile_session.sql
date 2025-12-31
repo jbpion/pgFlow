@@ -76,6 +76,9 @@ begin
                             -- If source already has table reference (contains '.'), function call, or is qualified
                             when value ~ '\.' or value ~ '\(' or value ~* '^[lt]\d+\.' then 
                                 format('%s AS %s', value, key)
+                            -- If starts with CASE (case-insensitive), don't prefix
+                            when value ~* '^\s*CASE\s' then
+                                format('%s AS %s', value, key)
                             -- Otherwise, prefix with t0 alias
                             else 
                                 format('t0.%s AS %s', value, key)
@@ -253,13 +256,16 @@ begin
                     when jsonb_array_length(value) = 1
                         then value->>0
                     else
-                        '(' || string_agg(value_elem, ' AND ') || ')'
+                        '(' ||
+                        (
+                            select string_agg(value_elem, ' AND ')
+                            from jsonb_array_elements_text(value) value_elem
+                        ) ||
+                        ')'
                 end,
                 ' OR '
             )
-            from jsonb_each(v_grouped_where),
-                 lateral jsonb_array_elements_text(value) value_elem
-            group by key
+            from jsonb_each(v_grouped_where)
         );
     end if;
 

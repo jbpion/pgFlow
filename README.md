@@ -1,5 +1,7 @@
 # (pg)Flow
 
+![Flow Logo](docs/images/flow_logo.png)
+
 **Flow** is a PostgreSQL-native, developer-friendly framework for building **explicit, inspectable data pipelines** directly inside the database.
 
 It provides a small set of composable, user-facing functions (`read`, `select`, `lookup`, etc.) that record intent, compile deterministic SQL, and execute it in a controlled way—without hiding what the database is doing.
