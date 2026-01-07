@@ -57,6 +57,13 @@ SELECT flow.where('transaction_date = CURRENT_DATE');
 SELECT flow.register_pipeline('todays_sales_with_tax');
 ```
 
+**Generated SQL:**
+```sql
+SELECT t0.quantity * unit_price AS line_total, t0.product_id AS product_id, t0.quantity AS quantity, ROUND(quantity * unit_price * 0.08, 2) AS tax_amount, ROUND(quantity * unit_price * 1.08, 2) AS total_with_tax, t0.transaction_id AS transaction_id, t0.unit_price AS unit_price
+FROM raw.transactions t0
+WHERE transaction_date = CURRENT_DATE
+```
+
 ### Conditional Logic
 
 ```sql
@@ -82,6 +89,23 @@ SELECT flow.select(
 SELECT flow.register_pipeline('customer_segmentation');
 ```
 
+**Generated SQL:**
+```sql
+SELECT t0.customer_id AS customer_id, t0.customer_name AS customer_name,
+CASE         
+WHEN total_purchases >= 10000 THEN 'platinum'        
+WHEN total_purchases >= 5000 THEN 'gold'        
+WHEN total_purchases >= 1000 THEN 'silver'        
+ELSE 'bronze'    
+END AS customer_tier, 
+CASE         
+WHEN last_purchase_date > CURRENT_DATE - INTERVAL '30 days' THEN true         
+ELSE false     
+END AS is_active,
+ t0.total_purchases AS total_purchases
+FROM raw.customers t0
+```
+
 ---
 
 ## Aggregations
@@ -90,7 +114,7 @@ SELECT flow.register_pipeline('customer_segmentation');
 
 ```sql
 -- Sales by region
-SELECT flow.read_db_object('sales.orders');
+SELECT flow.read_db_object('raw.orders');
 SELECT flow.where('order_date >= ''2025-01-01''');
 SELECT flow.aggregate(
     ARRAY['region'],
@@ -101,6 +125,18 @@ SELECT flow.aggregate(
 SELECT flow.write('sales.regional_summary', 'insert', truncate_before => true);
 
 SELECT flow.register_pipeline('daily_regional_rollup');
+```
+
+**Generated SQL:**
+```sql
+TRUNCATE TABLE sales.regional_summary; 
+INSERT INTO sales.regional_summary 
+SELECT region, AVG(total_amount) AS avg_order_value, COUNT(*) AS order_count, SUM(total_amount) AS total_sales
+FROM (
+    SELECT t0.order_id AS order_id, t0.customer_id AS customer_id, t0.order_date AS order_date, t0.status AS status, t0.total_amount AS total_amount, t0.region AS region
+FROM raw.orders t0) subquery
+WHERE order_date >= '2025-01-01'
+GROUP BY region
 ```
 
 ### Multi-Level Aggregation

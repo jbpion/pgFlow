@@ -120,12 +120,12 @@ begin
                     v_select_cols := v_select_cols ||
                         (
                             select array_agg(
-                                format(
-                                    '%s.%s AS %s',
-                                    v_lookup_alias,
-                                    col,
-                                    col
-                                )
+                                case
+                                    -- If column already has an alias prefix (contains '.'), use as-is but extract column name for alias
+                                    when col like '%.%' then format('%s AS %s', col, substring(col from '[^.]+$'))
+                                    -- Otherwise, prepend the lookup alias
+                                    else format('%s.%s AS %s', v_lookup_alias, col, col)
+                                end
                             )
                             from jsonb_array_elements_text(v_step.step_spec->'columns') col
                         );
@@ -184,46 +184,50 @@ begin
                         from jsonb_array_elements_text(v_step.step_spec->'group_by') col
                     );
 
-                    -- Build expressions for SELECT clause (with AS alias)
-                    v_group_by_select_exprs := (
-                        select array_agg(col)
-                        from unnest(v_group_by_cols) col
-                    );
-
-                    -- Build expressions for GROUP BY clause (no AS alias)
-                    v_group_by_clause_exprs := (
-                        select array_agg(col)
-                        from unnest(v_group_by_cols) col
-                    );
-
-                    -- Build aggregation columns from aggregations mapping
-                    v_agg_cols := (
-                        select array_agg(
-                            format('%s AS %s', value, key)
-                            order by key
-                        )
-                        from jsonb_each_text(v_step.step_spec->'aggregations')
-                    );
-
                     -- Before replacing select columns, wrap current query in subquery
                     -- Build the pre-aggregate query
                     v_sql := 
-                        'SELECT ' || array_to_string(v_select_cols, ', ') || E'\n' ||
-                        'FROM ' || v_from || E'\n' ||
-                        v_joins || E'\n' ||
-                        v_where;
+                        'SELECT ' || array_to_string(v_select_cols, E',\n') || E'\n' ||
+                        'FROM ' || v_from ||
+                        (case when v_joins != '' then v_joins else E'\n' end) ||
+                        (case when v_where != '' then v_where || E'\n' else E'\n' end);
                     
                     -- Wrap in subquery
                     v_from := '(' || E'\n' || v_sql || E'\n' || ') subquery';
                     v_joins := '';
                     v_where := '';
                     
-                    -- Now replace select columns with group by expressions (with aliases) + aggregations
+                    -- Extract column names from group by expressions (e.g., t0.region -> region)
+                    -- After subquery wrap, we reference these simple column names from subquery
+                    v_group_by_select_exprs := (
+                        select array_agg(
+                            case
+                                when col like '%.%' then substring(col from '[^.]+$')
+                                else col
+                            end
+                        )
+                        from unnest(v_group_by_cols) col
+                    );
+                    
+                    -- Build aggregation columns from aggregations mapping
+                    -- Replace table aliases (t0., t1., etc.) with subquery. prefix
+                    v_agg_cols := (
+                        select array_agg(
+                            format('%s AS %s', 
+                                -- Replace table aliases with 'subquery.' (e.g., t0.quantity -> subquery.quantity)
+                                regexp_replace(value, '\b[a-z][a-z0-9_]*\.', 'subquery.', 'g'),
+                                key
+                            )
+                            order by key
+                        )
+                        from jsonb_each_text(v_step.step_spec->'aggregations')
+                    );
+                    
+                    -- Now replace select columns with group by column names + aggregations
                     v_select_cols := v_group_by_select_exprs || v_agg_cols;
 
-                    -- Store GROUP BY clause using expressions only (no aliases)
-                    -- But now we reference from subquery, so use simple column names
-                    v_group_clause := 'GROUP BY ' || array_to_string(v_group_by_cols, ', ');
+                    -- GROUP BY uses the same simple column names
+                    v_group_clause := 'GROUP BY ' || array_to_string(v_group_by_select_exprs, ', ');
                     
                     v_group_by := v_group_clause;
                 end;
@@ -275,12 +279,17 @@ begin
     -- =====================
     -- FINAL SQL
     -- =====================
+    -- If no columns selected, default to *
+    if v_select_cols is null or array_length(v_select_cols, 1) is null then
+        v_select_cols := array['*'];
+    end if;
+    
     v_sql :=
-        'SELECT ' || array_to_string(v_select_cols, ', ') || E'\n' ||
-        'FROM ' || v_from || E'\n' ||
-        v_joins || E'\n' ||
-        v_where ||
-        (case when v_group_by != '' then E'\n' || v_group_by else '' end);
+        'SELECT ' || array_to_string(v_select_cols, E',\n') || E'\n' ||
+        'FROM ' || v_from ||
+        (case when v_joins != '' then v_joins else E'\n' end) ||
+        (case when v_where != '' then v_where || E'\n' else E'\n' end) ||
+        (case when v_group_by != '' then v_group_by else '' end);
 
     -- =====================
     -- WRAP WITH WRITE IF PRESENT
