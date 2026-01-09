@@ -1,6 +1,7 @@
 create or replace function flow.aggregate(
-    group_by_columns text[],
-    VARIADIC aggregations text[]
+    source        text,
+    group_by      text[] default null,
+    VARIADIC measures_and_having flow.measure[] default array[]::flow.measure[]
 )
 returns text
 language plpgsql
@@ -8,57 +9,91 @@ as $body$
 declare
     v_step_num int;
     v_step_name text;
-    v_agg_mapping jsonb;
-    v_actual_aggs text[];
-    v_agg text;
+    v_measure_mapping jsonb;
+    v_having_exprs text[];
+    v_measure flow.measure;
+    v_aliases text[];
+    v_alias text;
+    v_measures flow.measure[];
+    v_having flow.expr[];
 begin
-    if array_length(group_by_columns, 1) is null or array_length(group_by_columns, 1) = 0 then
-        raise exception 'GROUP BY columns cannot be empty';
+    -- Separate measures from having expressions
+    -- HAVING expressions can be cast as flow.measure with op='having'
+    v_measures := array(
+        select m from unnest(measures_and_having) m 
+        where (m).op != 'having'
+    );
+    
+    v_having := array(
+        select row((m).column)::flow.expr 
+        from unnest(measures_and_having) m 
+        where (m).op = 'having'
+    );
+
+    -- Validate: measures must not be empty
+    if v_measures is null or array_length(v_measures, 1) is null or array_length(v_measures, 1) = 0 then
+        raise exception 'measures must not be empty';
     end if;
 
-    -- Extract step_name if any aggregation is tagged with chr(2) prefix
-    v_step_name := null;
-    v_actual_aggs := ARRAY[]::text[];
-    
-    foreach v_agg in array aggregations
+    -- Validate: each measure alias must be unique
+    v_aliases := array(select (m).alias from unnest(v_measures) m);
+    if array_length(v_aliases, 1) != (select count(distinct a) from unnest(v_aliases) a) then
+        raise exception 'measure aliases must be unique';
+    end if;
+
+    -- Validate: registered aggregate operations
+    foreach v_measure in array v_measures
     loop
-        if v_agg like chr(2) || '%' then
-            v_step_name := substring(v_agg from 2);  -- Remove chr(2) prefix
-        else
-            v_actual_aggs := v_actual_aggs || v_agg;
+        if (v_measure).op not in ('sum', 'count', 'avg', 'min', 'max') then
+            raise exception 'unknown aggregate operation: %', (v_measure).op;
         end if;
     end loop;
 
-    if array_length(v_actual_aggs, 1) is null or array_length(v_actual_aggs, 1) = 0 then
-        raise exception 'Aggregation list cannot be empty';
+    -- Build measure mapping: alias -> aggregate expression
+    -- Format: { "alias": "AGG(column)" }
+    v_measure_mapping := (
+        select jsonb_object_agg(
+            (m).alias,
+            upper((m).op) || '(' || (m).column || ')'
+        )
+        from unnest(v_measures) m
+    );
+
+    -- Extract HAVING expressions and replace aliases with aggregate definitions
+    if v_having is not null and array_length(v_having, 1) > 0 then
+        -- For each HAVING expression, replace measure aliases with their aggregate expressions
+        v_having_exprs := (
+            select array_agg(resolved_expr)
+            from (
+                select (
+                    -- Start with the original expression
+                    select coalesce(
+                        (
+                            -- Try to replace each measure alias with its aggregate expression
+                            select regexp_replace(
+                                (e).expression,
+                                '\m' || (m).alias || '\M',
+                                upper((m).op) || '(' || (m).column || ')',
+                                'gi'
+                            )
+                            from unnest(v_measures) m
+                            where (e).expression ~* ('\m' || (m).alias || '\M')
+                            order by length((m).alias) desc  -- Replace longest aliases first
+                            limit 1
+                        ),
+                        (e).expression  -- If no replacement found, use original
+                    )
+                ) as resolved_expr
+                from unnest(v_having) e
+            ) resolved
+        );
     end if;
 
-    -- Parse aggregation array into mapping
-    -- Format: 'agg_expr' or 'agg_expr:target_name'
-    -- Note: Handle :: (cast operator) vs : (our delimiter)
-    v_agg_mapping := (
-        select jsonb_object_agg(
-            case 
-                when agg ~ '[^:]:$|[^:]:([^:]|$)' then  -- has single colon (not ::)
-                    substring(agg from '.*[^:]:([^:]+)$')  -- extract after last single colon
-                else 
-                    agg  -- no delimiter: use whole string as target
-            end,
-            case
-                when agg ~ '[^:]:$|[^:]:([^:]|$)' then  -- has single colon
-                    substring(agg from '^(.*):[^:]+$')     -- extract before last colon
-                else
-                    agg  -- source is whole string
-            end
-        )
-        from unnest(v_actual_aggs) agg
-        where agg is not null and trim(agg) != ''
-    );
-
-    v_step_name := coalesce(
-        v_step_name, 
-        'aggregate with ' || array_length(group_by_columns, 1)::text || ' group columns'
-    );
+    -- Generate step name
+    v_step_name := 'aggregate ' || array_length(v_measures, 1)::text || ' measure(s)';
+    if group_by is not null and array_length(group_by, 1) > 0 then
+        v_step_name := v_step_name || ' grouped by ' || array_length(group_by, 1)::text || ' column(s)';
+    end if;
 
     perform flow.__ensure_session_steps();
     perform flow.__assert_pipeline_started();
@@ -76,30 +111,17 @@ begin
         v_step_num,
         'aggregate',
         v_step_name,
-        'flow.aggregate(ARRAY['
-            || array_to_string(
-                   array(
-                       select quote_literal(c)
-                       from unnest(group_by_columns) c
-                   ),
-                   ','
-               )
-            || '], '
-            || case when v_step_name != 'aggregate with ' || array_length(group_by_columns, 1)::text || ' group columns'
-                    then 'flow.step(' || quote_literal(v_step_name) || '), '
-                    else ''
-               end
-            || array_to_string(
-                   array(
-                       select quote_literal(a)
-                       from unnest(v_actual_aggs) a
-                   ),
-                   ', '
-               )
-            || ')',
+        format(
+            'flow.aggregate(%L, %L, VARIADIC %L)',
+            source,
+            group_by,
+            v_measures
+        ),
         jsonb_build_object(
-            'group_by', to_jsonb(group_by_columns),
-            'aggregations', v_agg_mapping
+            'source', source,
+            'group_by', coalesce(to_jsonb(group_by), '[]'::jsonb),
+            'measures', v_measure_mapping,
+            'having', coalesce(to_jsonb(v_having_exprs), '[]'::jsonb)
         )
     );
 
@@ -111,51 +133,60 @@ begin
 end;
 $body$;
 
-comment on function flow.aggregate(text[], VARIADIC text[])
+comment on function flow.aggregate(text, text[], VARIADIC flow.measure[])
 is $comment$@category Core: Transformations
 
-Add a GROUP BY aggregation step to the pipeline.
+Add a GROUP BY aggregation step to the pipeline using structured measure AST nodes.
 
-Groups rows by specified columns and applies aggregation functions. Aggregations use VARIADIC syntax with optional colon-separated mapping.
+This function follows an AST-first design. Use measure constructors (flow.sum, flow.count, etc.) 
+to build structured aggregation specifications. The VARIADIC parameter allows passing measures
+directly without wrapping in ARRAY[].
 
 Parameters:
-  group_by_columns - Array of columns to group by (use ARRAY[] syntax)
-  aggregations     - Variable number of aggregation expressions with optional :target_name suffix
-                     Can include flow.step('name') anywhere to provide step description
+  source               - Source relation identifier
+  group_by             - Array of columns to group by (use flow.group_by() or NULL for ungrouped)
+  measures_and_having  - VARIADIC list of flow.measure nodes (measures + optional flow.having())
 
-Aggregation Syntax:
-- 'agg_function' - uses function call as column name
-- 'agg_function:target_name' - explicit alias
-- flow.step('description') - anywhere in the list to provide a step name
+Helper Functions:
+  - flow.group_by(col, ...)    - Create group by list (cleaner than ARRAY[])
+  - flow.sum(column, alias)    - Sum aggregation
+  - flow.count(column, alias)  - Count aggregation
+  - flow.avg(column, alias)    - Average aggregation
+  - flow.min(column, alias)    - Minimum aggregation
+  - flow.max(column, alias)    - Maximum aggregation
+  - flow.having(expression)    - HAVING clause condition
 
 Examples:
-  -- Group orders by customer and sum totals
-  SELECT flow.read_db_object('public.orders');
+  -- Group orders by customer (clean syntax!)
   SELECT flow.aggregate(
-      ARRAY['customer_id'],
-      'SUM(amount):total_amount',
-      'COUNT(*):order_count'
+      'orders',
+      flow.group_by('customer_id'),
+      flow.sum('amount', 'total_amount'),
+      flow.count('*', 'order_count')
   );
-  
-  -- JSON aggregation with flow.step() for description
-  SELECT flow.read_db_object('raw.order_lines');
-  SELECT flow.select(
-      'order_id',
-      'order_date',
-      'UPPER(customer):customer_name',
-      'jsonb_build_object(''line'', line_num, ''product'', product):line_item'
-  );
+
+  -- Multiple group columns
   SELECT flow.aggregate(
-      ARRAY['order_id', 'order_date', 'customer_name'],
-      flow.step('Aggregate line items into JSON array'),
-      'jsonb_agg(line_item ORDER BY (line_item->>''line'')::int):items'
+      'sales',
+      flow.group_by('region', 'product'),
+      flow.sum('quantity', 'total_quantity'),
+      flow.avg('price', 'avg_price'),
+      flow.having('total_quantity > 100')
   );
-  
-  -- flow.step() can be placed anywhere
+
+  -- Ungrouped aggregation (totals) - use NULL
   SELECT flow.aggregate(
-      ARRAY['customer_id'],
-      'SUM(amount):total_amount',
-      flow.step('Customer totals'),
-      'COUNT(*):order_count'
+      'transactions',
+      NULL,
+      flow.sum('amount', 'grand_total'),
+      flow.count('*', 'transaction_count')
+  );
+
+  -- You can still use ARRAY[] if preferred
+  SELECT flow.aggregate(
+      'orders',
+      ARRAY['customer_id', 'region'],
+      flow.sum('amount', 'total'),
+      flow.having('total > 500')
   );
 $comment$;

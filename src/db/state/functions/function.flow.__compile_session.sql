@@ -164,21 +164,12 @@ begin
                 declare
                     v_group_by_cols text[];
                     v_group_by_select_exprs text[];
-                    v_group_by_clause_exprs text[];
                     v_agg_cols text[];
                     v_group_clause text;
-                    v_prev_select_mapping jsonb;
+                    v_having_clause text;
+                    v_having_exprs text[];
                 begin
-                    -- Get the column mapping from previous SELECT step if exists
-                    select step_spec->'column_mapping' into v_prev_select_mapping
-                    from __session_steps
-                    where step_type = 'select'
-                      and step_order < v_step.step_order
-                    order by step_order desc
-                    limit 1;
-
-                    -- Build GROUP BY clause from group_by array
-                    -- Need to resolve aliases to their source expressions
+                    -- Build GROUP BY clause from group_by array (may be empty for ungrouped aggregation)
                     v_group_by_cols := (
                         select array_agg(col)
                         from jsonb_array_elements_text(v_step.step_spec->'group_by') col
@@ -199,17 +190,22 @@ begin
                     
                     -- Extract column names from group by expressions (e.g., t0.region -> region)
                     -- After subquery wrap, we reference these simple column names from subquery
-                    v_group_by_select_exprs := (
-                        select array_agg(
-                            case
-                                when col like '%.%' then substring(col from '[^.]+$')
-                                else col
-                            end
-                        )
-                        from unnest(v_group_by_cols) col
-                    );
+                    if v_group_by_cols is not null and array_length(v_group_by_cols, 1) > 0 then
+                        v_group_by_select_exprs := (
+                            select array_agg(
+                                case
+                                    when col like '%.%' then substring(col from '[^.]+$')
+                                    else col
+                                end
+                            )
+                            from unnest(v_group_by_cols) col
+                        );
+                    else
+                        v_group_by_select_exprs := ARRAY[]::text[];
+                    end if;
                     
-                    -- Build aggregation columns from aggregations mapping
+                    -- Build aggregation columns from measures mapping
+                    -- measures contains: { "alias": "AGG(column)" }
                     -- Replace table aliases (t0., t1., etc.) with subquery. prefix
                     v_agg_cols := (
                         select array_agg(
@@ -220,16 +216,40 @@ begin
                             )
                             order by key
                         )
-                        from jsonb_each_text(v_step.step_spec->'aggregations')
+                        from jsonb_each_text(v_step.step_spec->'measures')
                     );
                     
-                    -- Now replace select columns with group by column names + aggregations
-                    v_select_cols := v_group_by_select_exprs || v_agg_cols;
+                    -- Build SELECT columns: group by columns + measures
+                    if array_length(v_group_by_select_exprs, 1) > 0 then
+                        v_select_cols := v_group_by_select_exprs || v_agg_cols;
+                    else
+                        v_select_cols := v_agg_cols;
+                    end if;
 
-                    -- GROUP BY uses the same simple column names
-                    v_group_clause := 'GROUP BY ' || array_to_string(v_group_by_select_exprs, ', ');
+                    -- Build GROUP BY clause (only if we have group columns)
+                    if array_length(v_group_by_select_exprs, 1) > 0 then
+                        v_group_clause := 'GROUP BY ' || array_to_string(v_group_by_select_exprs, ', ');
+                    else
+                        v_group_clause := '';
+                    end if;
                     
-                    v_group_by := v_group_clause;
+                    -- Build HAVING clause if present (appends to GROUP BY)
+                    if jsonb_array_length(v_step.step_spec->'having') > 0 then
+                        v_having_exprs := (
+                            select array_agg(expr)
+                            from jsonb_array_elements_text(v_step.step_spec->'having') expr
+                        );
+                        v_having_clause := 'HAVING ' || array_to_string(v_having_exprs, ' AND ');
+                        -- Append HAVING after GROUP BY
+                        if v_group_clause != '' then
+                            v_group_by := v_group_clause || E'\n' || v_having_clause;
+                        else
+                            -- HAVING without GROUP BY (allowed in SQL)
+                            v_group_by := v_having_clause;
+                        end if;
+                    else
+                        v_group_by := v_group_clause;
+                    end if;
                 end;
 
             -- =====================            -- WRITE
