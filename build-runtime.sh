@@ -24,6 +24,8 @@ SOURCE_FILES=(
     "src/db/state/schema/schema.flow.sql"
     "src/db/state/tables/table.flow.pipeline.sql"
     "src/db/state/tables/table.flow.pipeline_step.sql"
+    "src/db/state/types/type.flow.measure.sql"
+    "src/db/state/types/type.flow.expr.sql"
     "src/db/state/functions/function.flow.__ensure_session_steps.sql"
     "src/db/state/functions/function.flow.__assert_pipeline_started.sql"
     "src/db/state/functions/function.flow.__ensure_source_exists.sql"

@@ -189,10 +189,11 @@ begin
                     v_where := '';
                     
                     -- Extract column names from group by expressions (e.g., t0.region -> region)
-                    -- After subquery wrap, we reference these simple column names from subquery
+                    -- After subquery wrap, we reference these columns with subquery. prefix
                     if v_group_by_cols is not null and array_length(v_group_by_cols, 1) > 0 then
                         v_group_by_select_exprs := (
                             select array_agg(
+                                'subquery.' ||
                                 case
                                     when col like '%.%' then substring(col from '[^.]+$')
                                     else col
@@ -220,13 +221,20 @@ begin
                     );
                     
                     -- Build SELECT columns: group by columns + measures
+                    -- For SELECT, use just the column name without subquery. prefix for cleaner output
                     if array_length(v_group_by_select_exprs, 1) > 0 then
-                        v_select_cols := v_group_by_select_exprs || v_agg_cols;
+                        v_select_cols := (
+                            select array_agg(
+                                substring(col from 'subquery\.(.*)') || ' AS ' || substring(col from 'subquery\.(.*)')
+                            )
+                            from unnest(v_group_by_select_exprs) col
+                        ) || v_agg_cols;
                     else
                         v_select_cols := v_agg_cols;
                     end if;
 
                     -- Build GROUP BY clause (only if we have group columns)
+                    -- Use full subquery.column references for GROUP BY
                     if array_length(v_group_by_select_exprs, 1) > 0 then
                         v_group_clause := 'GROUP BY ' || array_to_string(v_group_by_select_exprs, ', ');
                     else
@@ -234,9 +242,13 @@ begin
                     end if;
                     
                     -- Build HAVING clause if present (appends to GROUP BY)
+                    -- HAVING already has subquery. prefixes from the aggregate function
                     if jsonb_array_length(v_step.step_spec->'having') > 0 then
                         v_having_exprs := (
-                            select array_agg(expr)
+                            select array_agg(
+                                -- Replace table aliases with subquery. prefix
+                                regexp_replace(expr, '\b[a-z][a-z0-9_]*\.', 'subquery.', 'g')
+                            )
                             from jsonb_array_elements_text(v_step.step_spec->'having') expr
                         );
                         v_having_clause := 'HAVING ' || array_to_string(v_having_exprs, ' AND ');

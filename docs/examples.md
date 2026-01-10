@@ -143,24 +143,41 @@ GROUP BY region
 
 ```sql
 -- Sales by region and product category
-SELECT flow.read_db_object('sales.order_items');
-SELECT flow.lookup('products', 't1', 't0.product_id = t1.product_id');
+SELECT flow.read_db_object('raw.order_items');
+SELECT flow.lookup('raw.products', 't0.product_id = t1.product_id'
+, ARRAY['category'], 't1');
+
 SELECT flow.aggregate(
-    ARRAY['t0.region', 't1.category'],
-    flow.step('Revenue metrics'),
-    'SUM(t0.quantity * t0.unit_price):gross_revenue',
-    'SUM(t0.quantity * t1.cost):total_cost',
-    'SUM(t0.quantity * t0.unit_price) - SUM(t0.quantity * t1.cost):profit',
-    flow.step('Volume metrics'),
-    'COUNT(DISTINCT t0.order_id):order_count',
-    'SUM(t0.quantity):units_sold',
-    flow.step('Product diversity'),
-    'COUNT(DISTINCT t0.product_id):unique_products'
+    'orders',
+    flow.group_by('product_id'),
+        flow.sum('quantity', 'total_quantity'),
+        flow.count('*', 'order_count'),
+    flow.having('total_quantity > 1000')
 );
+
 SELECT flow.write('analytics.regional_category_summary', 'upsert', 
     ARRAY['region', 'category'], auto_create => true);
+```
 
-SELECT flow.register_pipeline('regional_category_analysis');
+**Generated SQL:**
+```sql
+SELECT product_id AS product_id,
+COUNT(*) AS order_count,
+SUM(quantity) AS total_quantity
+FROM (
+    SELECT t0.order_item_id AS order_item_id,
+    t0.order_id AS order_id,
+    t0.product_id AS product_id,
+    t0.quantity AS quantity,
+    t0.unit_price AS unit_price,
+    t0.region AS region,
+    t0.product_category AS product_category,
+    t1.category AS category
+    FROM raw.order_items t0
+    LEFT JOIN raw.products t1 ON t0.product_id = t1.product_id
+) subquery
+GROUP BY subquery.product_id
+HAVING SUM(quantity) > 1000
 ```
 
 ### Time-Based Aggregation
