@@ -31,19 +31,32 @@ begin
         );
     end if;
     
-    -- Helper: create table with WHERE false (inject before GROUP BY if present)
+    -- Helper: create table with WHERE false (inject after WHERE if present, or before GROUP BY)
     if p_auto_create then
-        v_group_by_pos := position('GROUP BY' in upper(v_sql));
-        if v_group_by_pos > 0 then
-            -- Insert WHERE false before GROUP BY
+        -- Check if there's already a WHERE clause
+        if upper(v_sql) ~ 'WHERE' then
+            -- Replace the WHERE clause with WHERE (original_condition) AND false
             v_create_table_sql := 'CREATE TABLE IF NOT EXISTS ' || p_target_table || ' AS ' || E'\n' ||
-                                  substring(v_sql from 1 for v_group_by_pos - 1) ||
-                                  ' WHERE false ' || E'\n' ||
-                                  substring(v_sql from v_group_by_pos);
+                                  regexp_replace(
+                                      v_sql,
+                                      'WHERE\s+(.+?)(\s+GROUP BY|\s+ORDER BY|\s+LIMIT|$)',
+                                      'WHERE (\1) AND false\2',
+                                      'i'
+                                  );
         else
-            -- No GROUP BY, append WHERE false at end
-            v_create_table_sql := 'CREATE TABLE IF NOT EXISTS ' || p_target_table || ' AS ' || E'\n' || 
-                                  v_sql || ' WHERE false';
+            -- No WHERE clause, inject before GROUP BY if present
+            v_group_by_pos := position('GROUP BY' in upper(v_sql));
+            if v_group_by_pos > 0 then
+                -- Insert WHERE false before GROUP BY
+                v_create_table_sql := 'CREATE TABLE IF NOT EXISTS ' || p_target_table || ' AS ' || E'\n' ||
+                                      substring(v_sql from 1 for v_group_by_pos - 1) ||
+                                      ' WHERE false ' || E'\n' ||
+                                      substring(v_sql from v_group_by_pos);
+            else
+                -- No GROUP BY or WHERE, append WHERE false at end
+                v_create_table_sql := 'CREATE TABLE IF NOT EXISTS ' || p_target_table || ' AS ' || E'\n' || 
+                                      v_sql || ' WHERE false';
+            end if;
         end if;
         v_create_table_sql := v_create_table_sql || '; ' || E'\n';
     end if;

@@ -75,7 +75,7 @@ is $comment$@category Pipeline: Management
 
 Save the current session pipeline for later execution.
 
-This function persists the pipeline steps from __session_steps into the flow.pipeline and flow.pipeline_step tables, allowing the pipeline to be executed later via flow.run().
+This function persists the pipeline steps from __session_steps into the flow.pipeline and flow.pipeline_step tables, allowing the pipeline to be executed later via flow.run_pipeline().
 
 Parameters:
   pipeline_name - Unique name for the pipeline
@@ -103,5 +103,5 @@ Examples:
   SELECT flow.register_pipeline('completed_orders', 'Updated report', 'replace', '1.1.0');
   
   -- Later, execute it
-  SELECT * FROM flow.run('completed_orders');
+  SELECT * FROM flow.run_pipeline('completed_orders');
 $comment$;

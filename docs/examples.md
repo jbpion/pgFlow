@@ -33,10 +33,41 @@ SELECT flow.register_pipeline('completed_orders_ytd', 'Orders completed in 2025'
 
 **Generated SQL:**
 ```sql
-SELECT t0.customer_id AS customer_id, t0.order_date AS order_date, t0.order_id AS order_id, t0.total_amount AS total_amount
+SELECT t0.customer_id AS customer_id,
+ t0.order_date AS order_date,
+  t0.order_id AS order_id,
+   t0.total_amount AS total_amount
 FROM raw.orders t0
 WHERE (order_date >= '2025-01-01' AND status = 'completed')
 ```
+
+### Multiple Filters with OR Logic
+
+```sql
+-- Filter orders with OR conditions grouped properly
+SELECT flow.read_db_object('raw.orders');
+SELECT flow.where('status = ''completed''', 'OR', 'status_group');
+SELECT flow.where('status = ''shipped''', 'OR', 'status_group');
+SELECT flow.where('order_date >= ''2025-01-01''');
+SELECT flow.where('total_amount >= 1000', 'OR', 'amount_group');
+SELECT flow.where('total_amount <= 100', 'OR', 'amount_group');
+SELECT flow.select('order_id', 'customer_id', 'status', 'total_amount', 'order_date');
+
+SELECT flow.compile();
+```
+
+**Generated SQL:**
+```sql
+SELECT t0.customer_id AS customer_id, 
+t0.order_date AS order_date, 
+t0.order_id AS order_id, 
+t0.status AS status, 
+t0.total_amount AS total_amount
+FROM raw.orders t0
+WHERE ((status = 'completed' OR status = 'shipped') AND order_date >= '2025-01-01' AND (total_amount >= 1000 OR total_amount <= 100))
+```
+
+This demonstrates how OR conditions within the same group are combined, and different groups are combined with AND.
 
 ### Calculated Columns
 
@@ -117,10 +148,11 @@ FROM raw.customers t0
 SELECT flow.read_db_object('raw.orders');
 SELECT flow.where('order_date >= ''2025-01-01''');
 SELECT flow.aggregate(
+    'orders',
     ARRAY['region'],
-    'COUNT(*):order_count',
-    'SUM(total_amount):total_sales',
-    'AVG(total_amount):avg_order_value'
+    flow.count('*', 'order_count'),
+    flow.sum('total_amount', 'total_sales'),
+    flow.avg('total_amount', 'avg_order_value')
 );
 SELECT flow.write('sales.regional_summary', 'insert', truncate_before => true);
 
@@ -144,15 +176,14 @@ GROUP BY region
 ```sql
 -- Sales by region and product category
 SELECT flow.read_db_object('raw.order_items');
-SELECT flow.lookup('raw.products', 't0.product_id = t1.product_id'
-, ARRAY['category'], 't1');
+SELECT flow.lookup('raw.products', 't0.product_id = t1.product_id', ARRAY['category'], 't1');
 
 SELECT flow.aggregate(
-    'orders',
-    flow.group_by('product_id'),
-        flow.sum('quantity', 'total_quantity'),
-        flow.count('*', 'order_count'),
-    flow.having('total_quantity > 1000')
+    'order_items',
+    ARRAY['t0.region', 't1.category'],
+    flow.sum('t0.quantity', 'total_quantity'),
+    flow.sum('t0.quantity * t0.unit_price', 'total_sales'),
+    flow.count('*', 'order_count')
 );
 
 SELECT flow.write('analytics.regional_category_summary', 'upsert', 
@@ -161,9 +192,11 @@ SELECT flow.write('analytics.regional_category_summary', 'upsert',
 
 **Generated SQL:**
 ```sql
-SELECT product_id AS product_id,
+SELECT t0.region AS region,
+t1.category AS category,
 COUNT(*) AS order_count,
-SUM(quantity) AS total_quantity
+SUM(t0.quantity * t0.unit_price) AS total_sales,
+SUM(t0.quantity) AS total_quantity
 FROM (
     SELECT t0.order_item_id AS order_item_id,
     t0.order_id AS order_id,
@@ -176,22 +209,22 @@ FROM (
     FROM raw.order_items t0
     LEFT JOIN raw.products t1 ON t0.product_id = t1.product_id
 ) subquery
-GROUP BY subquery.product_id
-HAVING SUM(quantity) > 1000
+GROUP BY subquery.region, subquery.category
 ```
 
 ### Time-Based Aggregation
 
 ```sql
 -- Monthly sales trend
-SELECT flow.read_db_object('sales.transactions');
+SELECT flow.read_db_object('raw.transactions');
 SELECT flow.aggregate(
+    'transactions',
     ARRAY['DATE_TRUNC(''month'', transaction_date)'],
-    'SUM(amount):monthly_total',
-    'COUNT(*):transaction_count',
-    'AVG(amount):avg_transaction',
-    'MIN(amount):min_transaction',
-    'MAX(amount):max_transaction'
+    flow.sum('amount', 'monthly_total'),
+    flow.count('*', 'transaction_count'),
+    flow.avg('amount', 'avg_transaction'),
+    flow.min('amount', 'min_transaction'),
+    flow.max('amount', 'max_transaction')
 );
 SELECT flow.select(
     'DATE_TRUNC:month',
@@ -214,8 +247,8 @@ SELECT flow.register_pipeline('monthly_sales_rollup');
 
 ```sql
 -- Enrich orders with customer info
-SELECT flow.read_db_object('orders');
-SELECT flow.lookup('customers', 't1', 't0.customer_id = t1.customer_id');
+SELECT flow.read_db_object('raw.orders');
+SELECT flow.lookup('raw.customers', 't0.customer_id = t1.customer_id', ARRAY['customer_name', 'email'], 't1');
 SELECT flow.select(
     't0.order_id',
     't0.order_date',
@@ -232,10 +265,10 @@ SELECT flow.register_pipeline('orders_with_customers');
 
 ```sql
 -- Orders with customer and product details
-SELECT flow.read_db_object('order_items');
-SELECT flow.lookup('orders', 't1', 't0.order_id = t1.order_id');
-SELECT flow.lookup('customers', 't2', 't1.customer_id = t2.customer_id');
-SELECT flow.lookup('products', 't3', 't0.product_id = t3.product_id');
+SELECT flow.read_db_object('raw.order_items');
+SELECT flow.lookup('raw.orders', 't0.order_id = t1.order_id', ARRAY['order_id', 'order_date', 'status', 'customer_id'], 't1');
+SELECT flow.lookup('raw.customers', 't1.customer_id = t2.customer_id', ARRAY['customer_name'], 't2');
+SELECT flow.lookup('raw.products', 't0.product_id = t3.product_id', ARRAY['product_name', 'category'], 't3');
 SELECT flow.select(
     't0.order_item_id',
     't1.order_id',
@@ -256,11 +289,12 @@ SELECT flow.register_pipeline('order_details_enriched');
 
 ```sql
 -- Join with multiple conditions
-SELECT flow.read_db_object('shipments');
+SELECT flow.read_db_object('raw.shipments');
 SELECT flow.lookup(
-    'warehouses', 
-    't1', 
-    't0.warehouse_id = t1.warehouse_id AND t1.is_active = true'
+    'raw.warehouses', 
+    't0.warehouse_id = t1.warehouse_id AND t1.is_active = true',
+    ARRAY['warehouse_name', 'region'],
+    't1'
 );
 SELECT flow.select(
     't0.shipment_id',
@@ -304,13 +338,14 @@ SELECT flow.register_pipeline('refresh_snapshot');
 
 ```sql
 -- Update customer totals
-SELECT flow.read_db_object('orders');
+SELECT flow.read_db_object('raw.orders');
 SELECT flow.where('status = ''completed''');
 SELECT flow.aggregate(
+    'orders',
     ARRAY['customer_id'],
-    'SUM(total_amount):lifetime_value',
-    'COUNT(*):order_count',
-    'MAX(order_date):last_order_date'
+    flow.sum('total_amount', 'lifetime_value'),
+    flow.count('*', 'order_count'),
+    flow.max('order_date', 'last_order_date')
 );
 SELECT flow.write(
     'customers_summary',
@@ -370,10 +405,11 @@ SELECT flow.register_pipeline('sync_active_subscriptions');
 SELECT flow.read_db_object('raw.events');
 SELECT flow.where('event_date = CURRENT_DATE');
 SELECT flow.aggregate(
+    'events',
     ARRAY['event_type', 'user_id'],
-    'COUNT(*):event_count',
-    'MIN(event_timestamp):first_event',
-    'MAX(event_timestamp):last_event'
+    flow.count('*', 'event_count'),
+    flow.min('event_timestamp', 'first_event'),
+    flow.max('event_timestamp', 'last_event')
 );
 SELECT flow.write(
     'analytics.daily_user_events',
@@ -392,7 +428,7 @@ SELECT flow.register_pipeline('daily_event_summary');
 
 ```sql
 -- Pipeline with date parameters
-SELECT flow.read_db_object('transactions');
+SELECT flow.read_db_object('raw.transactions');
 SELECT flow.where('transaction_date >= ''{{start_date}}''');
 SELECT flow.where('transaction_date <= ''{{end_date}}''');
 SELECT flow.select('*');
@@ -407,7 +443,7 @@ SELECT flow.register_pipeline(
 );
 
 -- Execute with variables
-SELECT * FROM flow.run(
+SELECT * FROM flow.run_pipeline(
     'transactions_by_date_range',
     jsonb_build_object('start_date', '2025-01-01', 'end_date', '2025-01-31')
 );
@@ -417,33 +453,28 @@ SELECT * FROM flow.run(
 
 ```sql
 -- Filtered report with multiple parameters
-SELECT flow.read_db_object('sales.orders');
+SELECT flow.read_db_object('raw.order_items');
 SELECT flow.where('region = ''{{region}}''');
-SELECT flow.where('order_date >= ''{{start_date}}''');
-SELECT flow.where('total_amount >= {{min_amount}}');
 SELECT flow.aggregate(
+    'order_items',
     ARRAY['product_category'],
-    'SUM(total_amount):category_total',
-    'COUNT(*):order_count'
+    flow.sum('quantity * unit_price', 'category_total'),
+    flow.count('*', 'order_count')
 );
 
 SELECT flow.register_pipeline(
     'sales_by_category',
-    'Sales by category for region and date range',
+    'Sales by category for region',
     jsonb_build_object(
-        'region', 'Region code (US, EU, APAC)',
-        'start_date', 'Start date (YYYY-MM-DD)',
-        'min_amount', 'Minimum order amount (numeric)'
+        'region', 'Region code (US, EU, APAC, CA)'
     )
 );
 
 -- Run with specific values
-SELECT * FROM flow.run(
+SELECT * FROM flow.run_pipeline(
     'sales_by_category',
     jsonb_build_object(
-        'region', 'US',
-        'start_date', '2025-01-01',
-        'min_amount', '1000'
+        'region', 'US'
     )
 );
 ```
@@ -459,7 +490,7 @@ SELECT flow.select('user_id', 'activity_type', 'activity_timestamp');
 SELECT flow.register_pipeline('todays_activity');
 
 -- Run without passing variables (uses current date)
-SELECT * FROM flow.run('todays_activity');
+SELECT * FROM flow.run_pipeline('todays_activity');
 ```
 
 ---
@@ -471,15 +502,16 @@ SELECT * FROM flow.run('todays_activity');
 ```sql
 -- 1. Build pipeline interactively
 SELECT flow.read_db_object('raw.orders');
-SELECT flow.lookup('customers', 't1', 't0.customer_id = t1.id');
+SELECT flow.lookup('raw.customers', 't0.customer_id = t1.customer_id', ARRAY['region'], 't1');
 SELECT flow.where('t0.status = ''completed''');
 SELECT flow.aggregate(
-    ARRAY['t1.region', 't0.product_category'],
-    'SUM(t0.amount):total_sales',
-    'COUNT(*):order_count'
+    'orders',
+    ARRAY['t1.region'],
+    flow.sum('t0.total_amount', 'total_sales'),
+    flow.count('*', 'order_count')
 );
 SELECT flow.write('analytics.sales_summary', 'upsert', 
-    ARRAY['region', 'product_category']);
+    ARRAY['region']);
 
 -- 2. Test compilation
 SELECT flow.compile();
@@ -492,7 +524,7 @@ SELECT flow.register_pipeline(
 );
 
 -- 4. Test execution
-SELECT * FROM flow.run('daily_sales_summary');
+SELECT * FROM flow.run_pipeline('daily_sales_summary');
 
 -- 5. Export for production
 SELECT flow.export_pipeline('daily_sales_summary', '1.0.0');
@@ -515,7 +547,7 @@ psql $DEV_CONNECTION -o migrations/daily_sales_summary_v1_0_0.sql \
 psql $PROD_CONNECTION -f migrations/daily_sales_summary_v1_0_0.sql
 
 # Run pipeline in production
-psql $PROD_CONNECTION -c "SELECT * FROM flow.run('daily_sales_summary')"
+psql $PROD_CONNECTION -c "SELECT * FROM flow.run_pipeline('daily_sales_summary')"
 ```
 
 ### Scheduled Execution
@@ -527,7 +559,7 @@ RETURNS void
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM flow.run('daily_sales_summary');
+    PERFORM flow.run_pipeline('daily_sales_summary');
     
     RAISE NOTICE 'Daily sales summary completed at %', now();
 EXCEPTION
@@ -566,7 +598,7 @@ DECLARE
     v_error_msg TEXT;
 BEGIN
     -- Execute pipeline
-    PERFORM flow.run(p_pipeline_name);
+    PERFORM flow.run_pipeline(p_pipeline_name);
     
     GET DIAGNOSTICS v_row_count = ROW_COUNT;
     

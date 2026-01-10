@@ -132,7 +132,7 @@ SELECT flow.compile();
 SELECT flow.register_pipepline('orders_example', 'An example pipeline showing order processing including a calculated column');'
 
 --Execute the pipeline.
-SELECT flow.run('orders_example');`
+SELECT flow.run_pipeline('orders_example');`
 ```
 At any point, you can inspect session state or compiled output.
 

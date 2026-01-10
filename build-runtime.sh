@@ -38,8 +38,9 @@ SOURCE_FILES=(
     "src/db/state/functions/function.flow.show_steps.sql"
     "src/db/state/functions/function.flow.inspect_step.sql"
     "src/db/state/functions/function.flow.show_pipeline.sql"
+    "src/db/state/functions/function.flow.export_pipeline_code.sql"
     "src/db/state/functions/function.flow.list_pipelines.sql"
-    "src/db/state/functions/function.flow.run.sql"
+    "src/db/state/functions/function.flow.run_pipeline.sql"
     "src/db/state/functions/function.flow.get_pipeline_variables.sql"
     "src/db/state/functions/function.flow.help.sql"
 )
