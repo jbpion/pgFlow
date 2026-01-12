@@ -2,6 +2,8 @@
 
 Practical examples demonstrating common pgFlow patterns and use cases.
 
+To run examples please load the [sample data](sample-data.md)
+
 ## Table of Contents
 
 - [Basic Pipelines](#basic-pipelines)

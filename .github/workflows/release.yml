@@ -26,22 +26,31 @@ jobs:
       - name: Ensure scripts are executable
         run: chmod +x *.sh
 
-      - name: Build artifact
+      - name: Build artifacts
         run: |
-          make build VERSION=${{ steps.version.outputs.version }}
+          make all VERSION=${{ steps.version.outputs.version }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           name: pgFlow v${{ steps.version.outputs.version }}
           tag_name: v${{ steps.version.outputs.version }}
-          files: dist/pgflow-${{ steps.version.outputs.version }}.sql
+          files: |
+            dist/pgflow-${{ steps.version.outputs.version }}.sql
+            dist/pgflow-${{ steps.version.outputs.version }}-runtime.sql
           body: |
             ## pgFlow v${{ steps.version.outputs.version }}
 
             PostgreSQL-native data pipeline framework.
 
-            ### Installation
+            ### Artifacts
+
+            This release includes two SQL artifacts:
+
+            - **`pgflow-${{ steps.version.outputs.version }}.sql`** - Full version with pipeline builder DSL
+            - **`pgflow-${{ steps.version.outputs.version }}-runtime.sql`** - Runtime-only version for production (execution only, no builder DSL)
+
+            ### Installation (Full Version)
 
             ```bash
             wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/pgflow-${{ steps.version.outputs.version }}.sql
@@ -50,6 +59,17 @@ jobs:
             ```bash
             psql -h <host> -U <user> -d <database> \
               -f pgflow-${{ steps.version.outputs.version }}.sql
+            ```
+
+            ### Installation (Runtime Only)
+
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/pgflow-${{ steps.version.outputs.version }}-runtime.sql
+            ```
+
+            ```bash
+            psql -h <host> -U <user> -d <database> \
+              -f pgflow-${{ steps.version.outputs.version }}-runtime.sql
             ```
 
             ### Upgrading

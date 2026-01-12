@@ -21,6 +21,12 @@ outputs:
   artifact-name:
     description: 'Name of the generated SQL artifact'
     value: ${{ steps.build.outputs.artifact-name }}
+  runtime-artifact-path:
+    description: 'Path to the generated runtime SQL artifact'
+    value: ${{ steps.build.outputs.runtime-artifact-path }}
+  runtime-artifact-name:
+    description: 'Name of the generated runtime SQL artifact'
+    value: ${{ steps.build.outputs.runtime-artifact-name }}
 
 runs:
   using: 'composite'
@@ -32,13 +38,23 @@ runs:
         version="${{ inputs.version }}"
         output_dir="${{ inputs.output-dir }}"
         
-        echo "Building pgFlow artifact version: $version"
+        echo "Building pgFlow artifacts version: $version"
         
         chmod +x ${{ github.action_path }}/build-artifact.sh
+        chmod +x ${{ github.action_path }}/build-runtime.sh
+        
+        # Build full artifact
         ${{ github.action_path }}/build-artifact.sh "$version" "$output_dir"
+        
+        # Build runtime artifact
+        ${{ github.action_path }}/build-runtime.sh "$version" "$output_dir"
         
         artifact_path="$output_dir/pgflow-$version.sql"
         artifact_name="pgflow-$version.sql"
+        runtime_artifact_path="$output_dir/pgflow-$version-runtime.sql"
+        runtime_artifact_name="pgflow-$version-runtime.sql"
         
         echo "artifact-path=$artifact_path" >> $GITHUB_OUTPUT
         echo "artifact-name=$artifact_name" >> $GITHUB_OUTPUT
+        echo "runtime-artifact-path=$runtime_artifact_path" >> $GITHUB_OUTPUT
+        echo "runtime-artifact-name=$runtime_artifact_name" >> $GITHUB_OUTPUT

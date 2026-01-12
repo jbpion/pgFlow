@@ -41,7 +41,7 @@ SELECT flow.read_db_object('public.trades');
 SELECT flow.select('trade_date', 'price * quantity AS notional');
 ```
 
-Each step is recorded, validated, and compiled later.
+Each step is recorded, and compiled later.
 
 * * * * *
 
@@ -107,7 +107,7 @@ Minimal Example
 ---------------
 ```sql
 -- Extract soruce data
-SELECT flow.read_db_object('staging.orders');
+SELECT flow.read_db_object('raw.orders');
 
 -- Transform
 --Use the ":" to alias columns.
@@ -136,6 +136,9 @@ SELECT flow.run_pipeline('orders_example');`
 ```
 At any point, you can inspect session state or compiled output.
 
+You can compose these pipelines into jobs, and then run that collection of pipelines.
+
+You can find more examples [here](docs/examples.md).
 * * * * *
 
 Design Principles
@@ -154,38 +157,6 @@ Flow uses native Postgres features:
 -   SQL generation
 
 No DSL outside SQL. No YAML. No Python runtime.
-
-* * * * *
-
-### Minimal Surface Area
-
-Only a few primitives exist initially:
-
--   `read`
-
--   `select`
-
--   `lookup`
-
--   `compile`
-
--   `run`
-
-Power comes from composition, not feature count.
-
-* * * * *
-
-### Inspectability Over Convenience
-
-You should always be able to answer:
-
--   What SQL will run?
-
--   Where did this column come from?
-
--   What step introduced this transformation?
-
-Flow optimizes for **understanding first**, performance second.
 
 * * * * *
 

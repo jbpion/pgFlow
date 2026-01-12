@@ -58,7 +58,7 @@ jobs:
           echo "Resolved version: $VERSION"
 
       - name: Build artifacts
-        run: make build
+        run: make all
 
       - name: Find built SQL artifact and create stable copy
         id: find_sql
@@ -97,11 +97,18 @@ jobs:
           SELECT flow.select('relname');
           SQL
 
-      - name: Upload build artifact
+      - name: Upload full build artifact
         uses: actions/upload-artifact@v4
         with:
           name: pgflow-sql
           path: dist/pgflow.sql
+          retention-days: 30
+
+      - name: Upload runtime build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pgflow-runtime-sql
+          path: dist/*-runtime.sql
           retention-days: 30
 
       - name: Create GitHub Release
@@ -110,5 +117,6 @@ jobs:
         with:
           files: |
             dist/pgflow-${{ steps.version.outputs.version }}.sql
+            dist/pgflow-${{ steps.version.outputs.version }}-runtime.sql
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
