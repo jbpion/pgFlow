@@ -1,5 +1,7 @@
 # (pg)Flow
 
+![Flow Logo](docs/images/flow_logo.png)
+
 **Flow** is a PostgreSQL-native, developer-friendly framework for building **explicit, inspectable data pipelines** directly inside the database.
 
 It provides a small set of composable, user-facing functions (`read`, `select`, `lookup`, etc.) that record intent, compile deterministic SQL, and execute it in a controlled way—without hiding what the database is doing.
@@ -35,11 +37,11 @@ No external runtime. No hidden execution engine. Just SQL you can inspect.
 A pipeline starts with a **read** and builds step-by-step:
 
 ```sql
-SELECT flow.read_db_object('public.trades');
+SELECT flow.read_db_object('raw.trades');
 SELECT flow.select('trade_date', 'price * quantity AS notional');
 ```
 
-Each step is recorded, validated, and compiled later.
+Each step is recorded, and compiled later.
 
 * * * * *
 
@@ -55,7 +57,7 @@ Flow stores pipeline steps in a **session-level temporary table** managed intern
 
 -   Clear lifecycle
 
-Calling `read` resets the pipeline intentionally (with a warning if one already exists).
+Calling `read` again resets the pipeline intentionally (with a warning if one already exists). This allows you to rework your flow until it emits the desired SQL and is written as readable, maintainable code.
 
 * * * * *
 
@@ -75,37 +77,11 @@ Each layer is small, testable, and replaceable.
 
 * * * * *
 
-### 4. Compile, Don't Guess
-
-Flow does **not** execute immediately.
-
-Instead:
-
-1.  User declares steps
-
-2.  Steps are validated
-
-3.  Compiler builds SQL
-
-4.  SQL is registered
-
-5.  Runner executes explicitly
-
-This makes it possible to:
-
--   Inspect compiled SQL
-
--   Optimize later
-
--   Add alternative execution strategies
-
-* * * * *
-
 Minimal Example
 ---------------
 ```sql
 -- Extract soruce data
-SELECT flow.read_db_object('staging.orders');
+SELECT flow.read_db_object('raw.orders');
 
 -- Transform
 --Use the ":" to alias columns.
@@ -130,10 +106,13 @@ SELECT flow.compile();
 SELECT flow.register_pipepline('orders_example', 'An example pipeline showing order processing including a calculated column');'
 
 --Execute the pipeline.
-SELECT flow.run('orders_example');`
+SELECT flow.run_pipeline('orders_example');`
 ```
 At any point, you can inspect session state or compiled output.
 
+You can compose these pipelines into jobs, and then run that collection of pipelines.
+
+You can find more examples [here](docs/examples.md).
 * * * * *
 
 Design Principles
@@ -152,38 +131,6 @@ Flow uses native Postgres features:
 -   SQL generation
 
 No DSL outside SQL. No YAML. No Python runtime.
-
-* * * * *
-
-### Minimal Surface Area
-
-Only a few primitives exist initially:
-
--   `read`
-
--   `select`
-
--   `lookup`
-
--   `compile`
-
--   `run`
-
-Power comes from composition, not feature count.
-
-* * * * *
-
-### Inspectability Over Convenience
-
-You should always be able to answer:
-
--   What SQL will run?
-
--   Where did this column come from?
-
--   What step introduced this transformation?
-
-Flow optimizes for **understanding first**, performance second.
 
 * * * * *
 

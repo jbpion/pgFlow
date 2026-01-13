@@ -76,6 +76,9 @@ begin
                             -- If source already has table reference (contains '.'), function call, or is qualified
                             when value ~ '\.' or value ~ '\(' or value ~* '^[lt]\d+\.' then 
                                 format('%s AS %s', value, key)
+                            -- If starts with CASE (case-insensitive), don't prefix
+                            when value ~* '^\s*CASE\s' then
+                                format('%s AS %s', value, key)
                             -- Otherwise, prefix with t0 alias
                             else 
                                 format('t0.%s AS %s', value, key)
@@ -117,12 +120,12 @@ begin
                     v_select_cols := v_select_cols ||
                         (
                             select array_agg(
-                                format(
-                                    '%s.%s AS %s',
-                                    v_lookup_alias,
-                                    col,
-                                    col
-                                )
+                                case
+                                    -- If column already has an alias prefix (contains '.'), use as-is but extract column name for alias
+                                    when col like '%.%' then format('%s AS %s', col, substring(col from '[^.]+$'))
+                                    -- Otherwise, prepend the lookup alias
+                                    else format('%s.%s AS %s', v_lookup_alias, col, col)
+                                end
                             )
                             from jsonb_array_elements_text(v_step.step_spec->'columns') col
                         );
@@ -161,68 +164,104 @@ begin
                 declare
                     v_group_by_cols text[];
                     v_group_by_select_exprs text[];
-                    v_group_by_clause_exprs text[];
                     v_agg_cols text[];
                     v_group_clause text;
-                    v_prev_select_mapping jsonb;
+                    v_having_clause text;
+                    v_having_exprs text[];
                 begin
-                    -- Get the column mapping from previous SELECT step if exists
-                    select step_spec->'column_mapping' into v_prev_select_mapping
-                    from __session_steps
-                    where step_type = 'select'
-                      and step_order < v_step.step_order
-                    order by step_order desc
-                    limit 1;
-
-                    -- Build GROUP BY clause from group_by array
-                    -- Need to resolve aliases to their source expressions
+                    -- Build GROUP BY clause from group_by array (may be empty for ungrouped aggregation)
                     v_group_by_cols := (
                         select array_agg(col)
                         from jsonb_array_elements_text(v_step.step_spec->'group_by') col
                     );
 
-                    -- Build expressions for SELECT clause (with AS alias)
-                    v_group_by_select_exprs := (
-                        select array_agg(col)
-                        from unnest(v_group_by_cols) col
-                    );
-
-                    -- Build expressions for GROUP BY clause (no AS alias)
-                    v_group_by_clause_exprs := (
-                        select array_agg(col)
-                        from unnest(v_group_by_cols) col
-                    );
-
-                    -- Build aggregation columns from aggregations mapping
-                    v_agg_cols := (
-                        select array_agg(
-                            format('%s AS %s', value, key)
-                            order by key
-                        )
-                        from jsonb_each_text(v_step.step_spec->'aggregations')
-                    );
-
                     -- Before replacing select columns, wrap current query in subquery
                     -- Build the pre-aggregate query
                     v_sql := 
-                        'SELECT ' || array_to_string(v_select_cols, ', ') || E'\n' ||
-                        'FROM ' || v_from || E'\n' ||
-                        v_joins || E'\n' ||
-                        v_where;
+                        'SELECT ' || array_to_string(v_select_cols, E',\n') || E'\n' ||
+                        'FROM ' || v_from ||
+                        (case when v_joins != '' then v_joins else E'\n' end) ||
+                        (case when v_where != '' then v_where || E'\n' else E'\n' end);
                     
                     -- Wrap in subquery
                     v_from := '(' || E'\n' || v_sql || E'\n' || ') subquery';
                     v_joins := '';
                     v_where := '';
                     
-                    -- Now replace select columns with group by expressions (with aliases) + aggregations
-                    v_select_cols := v_group_by_select_exprs || v_agg_cols;
-
-                    -- Store GROUP BY clause using expressions only (no aliases)
-                    -- But now we reference from subquery, so use simple column names
-                    v_group_clause := 'GROUP BY ' || array_to_string(v_group_by_cols, ', ');
+                    -- Extract column names from group by expressions (e.g., t0.region -> region)
+                    -- After subquery wrap, we reference these columns with subquery. prefix
+                    if v_group_by_cols is not null and array_length(v_group_by_cols, 1) > 0 then
+                        v_group_by_select_exprs := (
+                            select array_agg(
+                                'subquery.' ||
+                                case
+                                    when col like '%.%' then substring(col from '[^.]+$')
+                                    else col
+                                end
+                            )
+                            from unnest(v_group_by_cols) col
+                        );
+                    else
+                        v_group_by_select_exprs := ARRAY[]::text[];
+                    end if;
                     
-                    v_group_by := v_group_clause;
+                    -- Build aggregation columns from measures mapping
+                    -- measures contains: { "alias": "AGG(column)" }
+                    -- Replace table aliases (t0., t1., etc.) with subquery. prefix
+                    v_agg_cols := (
+                        select array_agg(
+                            format('%s AS %s', 
+                                -- Replace table aliases with 'subquery.' (e.g., t0.quantity -> subquery.quantity)
+                                regexp_replace(value, '\b[a-z][a-z0-9_]*\.', 'subquery.', 'g'),
+                                key
+                            )
+                            order by key
+                        )
+                        from jsonb_each_text(v_step.step_spec->'measures')
+                    );
+                    
+                    -- Build SELECT columns: group by columns + measures
+                    -- For SELECT, use just the column name without subquery. prefix for cleaner output
+                    if array_length(v_group_by_select_exprs, 1) > 0 then
+                        v_select_cols := (
+                            select array_agg(
+                                substring(col from 'subquery\.(.*)') || ' AS ' || substring(col from 'subquery\.(.*)')
+                            )
+                            from unnest(v_group_by_select_exprs) col
+                        ) || v_agg_cols;
+                    else
+                        v_select_cols := v_agg_cols;
+                    end if;
+
+                    -- Build GROUP BY clause (only if we have group columns)
+                    -- Use full subquery.column references for GROUP BY
+                    if array_length(v_group_by_select_exprs, 1) > 0 then
+                        v_group_clause := 'GROUP BY ' || array_to_string(v_group_by_select_exprs, ', ');
+                    else
+                        v_group_clause := '';
+                    end if;
+                    
+                    -- Build HAVING clause if present (appends to GROUP BY)
+                    -- HAVING already has subquery. prefixes from the aggregate function
+                    if jsonb_array_length(v_step.step_spec->'having') > 0 then
+                        v_having_exprs := (
+                            select array_agg(
+                                -- Replace table aliases with subquery. prefix
+                                regexp_replace(expr, '\b[a-z][a-z0-9_]*\.', 'subquery.', 'g')
+                            )
+                            from jsonb_array_elements_text(v_step.step_spec->'having') expr
+                        );
+                        v_having_clause := 'HAVING ' || array_to_string(v_having_exprs, ' AND ');
+                        -- Append HAVING after GROUP BY
+                        if v_group_clause != '' then
+                            v_group_by := v_group_clause || E'\n' || v_having_clause;
+                        else
+                            -- HAVING without GROUP BY (allowed in SQL)
+                            v_group_by := v_having_clause;
+                        end if;
+                    else
+                        v_group_by := v_group_clause;
+                    end if;
                 end;
 
             -- =====================            -- WRITE
@@ -230,10 +269,13 @@ begin
             when 'write' then
                 v_write_target := v_step.step_spec->>'target_table';
                 v_write_mode := v_step.step_spec->>'mode';
-                v_write_unique_keys := (
-                    select array_agg(value::text)
-                    from jsonb_array_elements_text(v_step.step_spec->'unique_keys')
-                );
+                v_write_unique_keys := 
+                    case 
+                        when jsonb_typeof(v_step.step_spec->'unique_keys') = 'array' then
+                            (select array_agg(value::text)
+                             from jsonb_array_elements_text(v_step.step_spec->'unique_keys'))
+                        else null
+                    end;
                 v_write_auto_create := coalesce((v_step.step_spec->>'auto_create')::boolean, false);
                 v_write_truncate := coalesce((v_step.step_spec->>'truncate_before')::boolean, false);
 
@@ -253,25 +295,33 @@ begin
                     when jsonb_array_length(value) = 1
                         then value->>0
                     else
-                        '(' || string_agg(value_elem, ' AND ') || ')'
+                        '(' ||
+                        (
+                            select string_agg(value_elem, ' AND ')
+                            from jsonb_array_elements_text(value) value_elem
+                        ) ||
+                        ')'
                 end,
                 ' OR '
             )
-            from jsonb_each(v_grouped_where),
-                 lateral jsonb_array_elements_text(value) value_elem
-            group by key
+            from jsonb_each(v_grouped_where)
         );
     end if;
 
     -- =====================
     -- FINAL SQL
     -- =====================
+    -- If no columns selected, default to *
+    if v_select_cols is null or array_length(v_select_cols, 1) is null then
+        v_select_cols := array['*'];
+    end if;
+    
     v_sql :=
-        'SELECT ' || array_to_string(v_select_cols, ', ') || E'\n' ||
-        'FROM ' || v_from || E'\n' ||
-        v_joins || E'\n' ||
-        v_where ||
-        (case when v_group_by != '' then E'\n' || v_group_by else '' end);
+        'SELECT ' || array_to_string(v_select_cols, E',\n') || E'\n' ||
+        'FROM ' || v_from ||
+        (case when v_joins != '' then v_joins else E'\n' end) ||
+        (case when v_where != '' then v_where || E'\n' else E'\n' end) ||
+        (case when v_group_by != '' then v_group_by else '' end);
 
     -- =====================
     -- WRAP WITH WRITE IF PRESENT

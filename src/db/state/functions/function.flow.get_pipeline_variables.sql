@@ -60,7 +60,7 @@ is $comment$@category Pipeline: Inspection
 
 Extract all {{variable}} placeholders from a registered pipeline.
 
-Use this to discover what variables a pipeline expects before running it with flow.run().
+Use this to discover what variables a pipeline expects before running it with flow.run_pipeline().
 
 Parameters:
   pipeline_name - Name of registered pipeline to inspect
