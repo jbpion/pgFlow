@@ -37,7 +37,7 @@ No external runtime. No hidden execution engine. Just SQL you can inspect.
 A pipeline starts with a **read** and builds step-by-step:
 
 ```sql
-SELECT flow.read_db_object('public.trades');
+SELECT flow.read_db_object('raw.trades');
 SELECT flow.select('trade_date', 'price * quantity AS notional');
 ```
 
@@ -57,7 +57,7 @@ Flow stores pipeline steps in a **session-level temporary table** managed intern
 
 -   Clear lifecycle
 
-Calling `read` resets the pipeline intentionally (with a warning if one already exists).
+Calling `read` again resets the pipeline intentionally (with a warning if one already exists). This allows you to rework your flow until it emits the desired SQL and is written as readable, maintainable code.
 
 * * * * *
 
@@ -74,32 +74,6 @@ Flow is internally divided into:
 | **Runner** | Execute compiled SQL |
 
 Each layer is small, testable, and replaceable.
-
-* * * * *
-
-### 4. Compile, Don't Guess
-
-Flow does **not** execute immediately.
-
-Instead:
-
-1.  User declares steps
-
-2.  Steps are validated
-
-3.  Compiler builds SQL
-
-4.  SQL is registered
-
-5.  Runner executes explicitly
-
-This makes it possible to:
-
--   Inspect compiled SQL
-
--   Optimize later
-
--   Add alternative execution strategies
 
 * * * * *
 

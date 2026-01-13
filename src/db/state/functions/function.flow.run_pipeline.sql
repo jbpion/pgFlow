@@ -16,7 +16,7 @@ begin
     -- Load the pre-compiled SQL from the pipeline table
     select compiled_sql into v_sql
     from flow.pipeline
-    where flow.pipeline.pipeline_name = run.pipeline_name;
+    where flow.pipeline.pipeline_name = run_pipeline.pipeline_name;
 
     if v_sql is null then
         raise exception 'Pipeline "%" not found or has no compiled SQL. Re-register the pipeline.', pipeline_name;
@@ -47,8 +47,8 @@ begin
         -- Return empty result set
         return;
     else
-        -- Execute query that returns rows
-        return query execute v_sql;
+        -- Execute query that returns rows, wrap each row as jsonb
+        return query execute 'SELECT to_jsonb(subq.*) FROM (' || v_sql || ') subq';
     end if;
 end;
 $body$;
