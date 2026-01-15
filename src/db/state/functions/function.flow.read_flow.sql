@@ -24,3 +24,13 @@ begin
     );
 end;
 $$;
+
+comment on function flow.read_flow(text, text)
+is $comment$@category Core: Pipeline Initialization
+
+Read from a registered pipeline as a data source. This allows chaining pipelines together, using the output of one pipeline as input to another.
+
+Parameters:
+  pipeline_name - Name of the registered pipeline to read from
+  step_name     - Optional name for this step (default: auto-generated)
+$comment$;

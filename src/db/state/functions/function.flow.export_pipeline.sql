@@ -153,4 +153,6 @@ end;
 $body$;
 
 comment on function flow.export_pipeline(text, text) is 
-'Export a registered pipeline as deployable SQL script. Returns SQL that safely upserts the pipeline definition with version tracking. Safe to include in migration scripts. Also prints the SQL to the console via RAISE NOTICE.';
+'@category Pipeline: Export
+
+Export a registered pipeline as deployable SQL script. Returns SQL that safely upserts the pipeline definition with version tracking. Safe to include in migration scripts. Also prints the SQL to the console via RAISE NOTICE.';

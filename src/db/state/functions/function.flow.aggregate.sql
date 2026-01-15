@@ -134,7 +134,7 @@ end;
 $body$;
 
 comment on function flow.aggregate(text, text[], VARIADIC flow.measure[])
-is $comment$@category Core: Transformations
+is $comment$@category Core: Aggregation
 
 Add a GROUP BY aggregation step to the pipeline using structured measure AST nodes.
 
