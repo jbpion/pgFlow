@@ -172,8 +172,33 @@ begin
                         );
                     end loop;
                     
-                    -- Append new columns to existing select columns instead of replacing
-                    v_select_cols := v_select_cols || v_temp_cols;
+                    -- Remove any existing columns with aliases that are being redefined in v_temp_cols
+                    -- Then append the new columns to avoid duplicates
+                    declare
+                        v_new_aliases text[];
+                        v_existing_alias text;
+                    begin
+                        -- Extract aliases from new columns (format is "expression AS alias")
+                        v_new_aliases := (
+                            select array_agg(substring(col from ' AS (.+)$'))
+                            from unnest(v_temp_cols) col
+                        );
+                        
+                        -- Filter out columns from v_select_cols whose aliases are being redefined
+                        v_select_cols := (
+                            select array_agg(col)
+                            from unnest(v_select_cols) col
+                            where substring(col from ' AS (.+)$') != ALL(v_new_aliases)
+                        );
+                        
+                        -- Handle case where v_select_cols becomes NULL if all columns were filtered out
+                        if v_select_cols is null then
+                            v_select_cols := ARRAY[]::text[];
+                        end if;
+                        
+                        -- Now append the new columns
+                        v_select_cols := v_select_cols || v_temp_cols;
+                    end;
                 end;
 
             -- =====================

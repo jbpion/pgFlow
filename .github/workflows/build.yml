@@ -93,7 +93,7 @@ jobs:
         run: |
           psql -h localhost -U postgres -d postgres -f dist/pgflow.sql
           psql -h localhost -U postgres -d postgres <<'SQL'
-          SELECT flow.read('pg_catalog.pg_class');
+          SELECT flow.read_db_object('pg_catalog.pg_class');
           SELECT flow.select('relname');
           SQL
 

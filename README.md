@@ -77,40 +77,48 @@ Each layer is small, testable, and replaceable.
 
 * * * * *
 
-Minimal Example
+Small Example
 ---------------
 ```sql
--- Extract soruce data
+--Read
 SELECT flow.read_db_object('raw.orders');
 
--- Transform
---Use the ":" to alias columns.
-SELECT flow.select(
-  'order_id:order_key',
-  'customer_id:customer_key',
-  'amount * tax_rate:total_amount'
-);
+--Clean - Create status_cleaned alias
+SELECT flow.select('UPPER(status):status_cleaned');
 
--- Write the result to a target table.
-SELECT flow.write(
-    'stage.orders',
-    mode => 'upsert',
-    unique_keys => ARRAY['order_id'],
-    auto_create => false 
-);
+--Filter - Use the status_cleaned alias from previous step
+SELECT flow.where('status_cleaned = ''COMPLETED''');
 
--- View the current session SQL.
+--Map
+SELECT flow.select('order_id:order_id',
+                   'customer_id:client_id',
+                   'order_date:date_of_order',
+                   'status_cleaned:order_status',
+                   'total_amount:amount_total',
+                   'region:sales_region');
+
+--Compute - Use amount_total alias and include all columns for final output
+SELECT flow.select('amount_total * 1.1:amount_with_tax');
+
+--Write
+SELECT flow.write('order_report', 'insert', ARRAY['order_id'], auto_create => true);
+
+--Review the generated code [optional]
 SELECT flow.compile();
 
---Register the pipeline.
-SELECT flow.register_pipepline('orders_example', 'An example pipeline showing order processing including a calculated column');'
+--Record pipeline
+SELECT flow.register_pipeline('order_reporting', 'Get the current order report with tax included.');
 
---Execute the pipeline.
-SELECT flow.run_pipeline('orders_example');`
+--Create the job
+SELECT flow.create_job('generate_order_reporting');
+
+--Add the pipeline to the job.
+SELECT flow.add_pipeline_to_job('generate_order_reporting', 'order_reporting');
+
+--Run the job.
+SELECT flow.run_job('generate_order_reporting');
 ```
 At any point, you can inspect session state or compiled output.
-
-You can compose these pipelines into jobs, and then run that collection of pipelines.
 
 You can find more examples [here](docs/examples.md).
 * * * * *
