@@ -172,7 +172,8 @@ begin
                         );
                     end loop;
                     
-                    v_select_cols := v_temp_cols;
+                    -- Append new columns to existing select columns instead of replacing
+                    v_select_cols := v_select_cols || v_temp_cols;
                 end;
 
             -- =====================
