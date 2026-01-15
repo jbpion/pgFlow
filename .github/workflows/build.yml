@@ -58,14 +58,19 @@ jobs:
           echo "Resolved version: $VERSION"
 
       - name: Build artifacts
-        run: make all
+        run: make all VERSION=${{ steps.version.outputs.version }}
 
       - name: Find built SQL artifact and create stable copy
         id: find_sql
         run: |
           set -euo pipefail
-
-          if [ -f dist/pgflow.sql ]; then
+          
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          # Look for version-specific files first
+          if [ -f "dist/pgflow-${VERSION}.sql" ]; then
+            FILE="dist/pgflow-${VERSION}.sql"
+          elif [ -f dist/pgflow.sql ]; then
             FILE=dist/pgflow.sql
           else
             FILE=$(ls -t dist/*pgflow*.sql 2>/dev/null | head -n1 || true)
@@ -86,16 +91,31 @@ jobs:
           # Copy to a canonical filename (more portable than a symlink)
           cp -a "$FILE" dist/pgflow.sql
           echo "Copied $FILE -> dist/pgflow.sql"
+          
+          # List all built artifacts for debugging
+          echo "Built artifacts:"
+          ls -lh dist/*.sql
 
       - name: Smoke test install
         env:
           PGPASSWORD: postgres
         run: |
+          set -euo pipefail
+          echo "Installing pgFlow..."
           psql -h localhost -U postgres -d postgres -f dist/pgflow.sql
+          
+          echo "Running smoke tests..."
           psql -h localhost -U postgres -d postgres <<'SQL'
+          -- Test basic pipeline creation
           SELECT flow.read_db_object('pg_catalog.pg_class');
           SELECT flow.select('relname');
+          SELECT flow.compile();
+          
+          -- Verify help function works
+          SELECT flow.help();
           SQL
+          
+          echo "Smoke tests passed!"
 
       - name: Upload full build artifact
         uses: actions/upload-artifact@v4
@@ -110,6 +130,7 @@ jobs:
           name: pgflow-runtime-sql
           path: dist/*-runtime.sql
           retention-days: 30
+          if-no-files-found: warn
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -118,5 +139,6 @@ jobs:
           files: |
             dist/pgflow-${{ steps.version.outputs.version }}.sql
             dist/pgflow-${{ steps.version.outputs.version }}-runtime.sql
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
