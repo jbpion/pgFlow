@@ -20,6 +20,7 @@ declare
     v_write_unique_keys text[];
     v_write_auto_create boolean;
     v_write_truncate   boolean;
+    v_column_aliases   jsonb := '{}'::jsonb;  -- Tracks column alias -> source expression mapping
 begin
     perform flow.__ensure_session_steps();
     perform flow.__assert_pipeline_started();
@@ -63,30 +64,116 @@ begin
                     where c.table_schema = v_obj_schema
                       and c.table_name = v_obj_name;
                 end if;
+                
+                -- Initialize column aliases for base table columns
+                -- Each column maps to table_alias.column_name
+                if v_obj_schema = 'pg_temp' then
+                    select jsonb_object_agg(column_name, format('%s.%s', v_alias, column_name))
+                    into v_column_aliases
+                    from information_schema.columns c
+                    where c.table_schema ~ '^pg_temp_'
+                      and c.table_name = v_obj_name;
+                else
+                    select jsonb_object_agg(column_name, format('%s.%s', v_alias, column_name))
+                    into v_column_aliases
+                    from information_schema.columns c
+                    where c.table_schema = v_obj_schema
+                      and c.table_name = v_obj_name;
+                end if;
 
             -- =====================
             -- SELECT
             -- =====================
             when 'select' then
-                -- Replace current select columns using explicit target->source mapping
-                -- Auto-qualify unqualified source expressions with t0 alias
-                v_select_cols := (
-                    select array_agg(
-                        case
-                            -- If source already has table reference (contains '.'), function call, or is qualified
-                            when value ~ '\.' or value ~ '\(' or value ~* '^[lt]\d+\.' then 
-                                format('%s AS %s', value, key)
-                            -- If starts with CASE (case-insensitive), don't prefix
-                            when value ~* '^\s*CASE\s' then
-                                format('%s AS %s', value, key)
-                            -- Otherwise, prefix with t0 alias
-                            else 
-                                format('t0.%s AS %s', value, key)
-                        end
-                        order by key  -- deterministic ordering
-                    )
-                    from jsonb_each_text(v_step.step_spec->'column_mapping')
-                );
+                declare
+                    v_resolved_source text;
+                    v_target_col text;
+                    v_source_col text;
+                    v_alias_name text;
+                    v_alias_expr text;
+                    v_temp_cols text[];
+                begin
+                    -- Build select columns by resolving aliases
+                    v_temp_cols := ARRAY[]::text[];
+                    
+                    for v_target_col, v_source_col in
+                        select key, value
+                        from jsonb_each_text(v_step.step_spec->'column_mapping')
+                        order by key
+                    loop
+                        -- Resolve the source column expression
+                        if v_column_aliases ? v_source_col then
+                            -- Direct alias match
+                            v_resolved_source := v_column_aliases->>v_source_col;
+                        elsif v_source_col ~* '^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*' or v_source_col ~* '^[lt]\d+\.' then
+                            -- Already qualified (matches patterns like: t0.column, table.column, l1.field)
+                            -- But NOT decimal numbers like 1.1 or 3.14
+                            v_resolved_source := v_source_col;
+                        elsif v_source_col ~ '\(' then
+                            -- Function call - resolve any aliases within it
+                            v_resolved_source := v_source_col;
+                            for v_alias_name, v_alias_expr in
+                                select key, value from jsonb_each_text(v_column_aliases)
+                            loop
+                                -- Only replace if NOT preceded by a dot (not already qualified)
+                                v_resolved_source := regexp_replace(
+                                    v_resolved_source,
+                                    '(?<!\.)\y' || v_alias_name || '\y',
+                                    v_alias_expr,
+                                    'g'
+                                );
+                            end loop;
+                        elsif v_source_col ~* '^\s*CASE\s' then
+                            -- CASE expression - resolve any aliases within it
+                            v_resolved_source := v_source_col;
+                            for v_alias_name, v_alias_expr in
+                                select key, value from jsonb_each_text(v_column_aliases)
+                            loop
+                                -- Only replace if NOT preceded by a dot (not already qualified)
+                                v_resolved_source := regexp_replace(
+                                    v_resolved_source,
+                                    '(?<!\.)\y' || v_alias_name || '\y',
+                                    v_alias_expr,
+                                    'g'
+                                );
+                            end loop;
+                        else
+                            -- Could be a simple column, expression with aliases, or arithmetic
+                            v_resolved_source := v_source_col;
+                            
+                            -- Try to replace any known aliases in the expression
+                            -- Use negative lookbehind to avoid matching already-qualified columns
+                            for v_alias_name, v_alias_expr in
+                                select key, value from jsonb_each_text(v_column_aliases)
+                            loop
+                                -- Only replace if NOT preceded by a dot (not already qualified)
+                                v_resolved_source := regexp_replace(
+                                    v_resolved_source,
+                                    '(?<!\.)(\y' || v_alias_name || '\y)',
+                                    v_alias_expr,
+                                    'g'
+                                );
+                            end loop;
+                            
+                            -- If nothing was replaced and it's a simple identifier, qualify it
+                            if v_resolved_source = v_source_col and v_source_col ~ '^\w+$' then
+                                v_resolved_source := format('t0.%s', v_source_col);
+                            end if;
+                        end if;
+                        
+                        -- Add to column list
+                        v_temp_cols := v_temp_cols || format('%s AS %s', v_resolved_source, v_target_col);
+                        
+                        -- Store the alias mapping for this target column
+                        v_column_aliases := jsonb_set(
+                            v_column_aliases,
+                            array[v_target_col],
+                            to_jsonb(v_resolved_source)
+                        );
+                    end loop;
+                    
+                    v_select_cols := v_temp_cols;
+                end;
 
             -- =====================
             -- LOOKUP
@@ -288,24 +375,61 @@ begin
     -- BUILD WHERE CLAUSE
     -- =====================
     if v_grouped_where != '{}'::jsonb then
-        v_where := 'WHERE ' ||
-        (
-            select string_agg(
-                case
-                    when jsonb_array_length(value) = 1
-                        then value->>0
-                    else
-                        '(' ||
-                        (
-                            select string_agg(value_elem, ' AND ')
-                            from jsonb_array_elements_text(value) value_elem
-                        ) ||
-                        ')'
-                end,
-                ' OR '
-            )
-            from jsonb_each(v_grouped_where)
-        );
+        declare
+            v_condition_text text;
+            v_resolved_condition text;
+            v_alias_key text;
+            v_col_name text;
+        begin
+            v_where := 'WHERE ' ||
+            (
+                select string_agg(
+                    case
+                        when jsonb_array_length(value) = 1
+                            then 
+                                -- Resolve aliases in single condition
+                                (
+                                    select 
+                                        case
+                                            -- Extract the column name (first word before operator)
+                                            when v_column_aliases ? (regexp_match(value->>0, '^\s*(\w+)\s*[=<>!]'))[1] then
+                                                -- Replace only the column name, not the entire condition
+                                                regexp_replace(
+                                                    value->>0,
+                                                    '^\s*(\w+)(\s*[=<>!].*)$',
+                                                    v_column_aliases->>(regexp_match(value->>0, '^\s*(\w+)\s*[=<>!]'))[1] || '\2'
+                                                )
+                                            else
+                                                value->>0
+                                        end
+                                )
+                        else
+                            '(' ||
+                            (
+                                select string_agg(
+                                    case
+                                        -- Extract the column name (first word before operator)
+                                        when v_column_aliases ? (regexp_match(value_elem, '^\s*(\w+)\s*[=<>!]'))[1] then
+                                            -- Replace only the column name
+                                            regexp_replace(
+                                                value_elem,
+                                                '^\s*(\w+)(\s*[=<>!].*)$',
+                                                v_column_aliases->>(regexp_match(value_elem, '^\s*(\w+)\s*[=<>!]'))[1] || '\2'
+                                            )
+                                        else
+                                            value_elem
+                                    end,
+                                    ' AND '
+                                )
+                                from jsonb_array_elements_text(value) value_elem
+                            ) ||
+                            ')'
+                    end,
+                    ' OR '
+                )
+                from jsonb_each(v_grouped_where)
+            );
+        end;
     end if;
 
     -- =====================
