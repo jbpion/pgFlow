@@ -35,7 +35,6 @@ SOURCE_FILES=(
     "src/db/state/functions/function.flow.__ensure_step_exists.sql"
     "src/db/state/functions/function.flow.__next_step_order.sql"
     "src/db/state/functions/function.flow.read_db_object.sql"
-    "src/db/state/functions/function.flow.read_flow.sql"
     "src/db/state/functions/function.flow.step.sql"
     "src/db/state/functions/function.flow.select.sql"
     "src/db/state/functions/function.flow.where.sql"
