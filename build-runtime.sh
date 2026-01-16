@@ -19,7 +19,7 @@ TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
 OUTPUT_FILE="$OUTPUT_DIR/pgflow-$VERSION-runtime.sql"
 
 # Define deployment order - RUNTIME ONLY
-# Excludes: read_db_object, read_flow, step, select, where, lookup, aggregate, write, register_pipeline
+# Excludes: read_db_object, step, select, where, lookup, aggregate, write, register_pipeline
 SOURCE_FILES=(
     "src/db/state/schema/schema.flow.sql"
     "src/db/state/tables/table.flow.pipeline.sql"
