@@ -147,3 +147,9 @@ Got to the [releases ](https://github.com/jbpion/pgFlow/releases/) and follow th
 
 ### Upgrading
 pgFlow is idempotent — re-running the installer is safe.
+
+### Security
+Jobs and pipelines accept user variables that execute dynamically. The variables are wrapped in the built-in quote_literal() function to prevent SQL injection.
+
+### Use Case
+The imagined use cases are for running in an environment where you want to do rapid prototyping of ETL. This can also be useful where your database environment is isolated from standard ETL tools.

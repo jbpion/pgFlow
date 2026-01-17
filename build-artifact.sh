@@ -47,6 +47,7 @@ SOURCE_FILES=(
     "src/db/state/functions/function.flow.group_by.sql"
     "src/db/state/functions/function.flow.having.sql"
     "src/db/state/functions/function.flow.aggregate.sql"
+    "src/db/state/functions/function.flow.delete.sql"
     "src/db/state/functions/function.flow.write.sql"
     "src/db/state/functions/function.flow.remove_step.sql"
     "src/db/state/functions/function.flow.__extract_column_names.sql"
