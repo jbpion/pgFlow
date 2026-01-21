@@ -10,6 +10,7 @@ To run examples please load the [sample data](sample-data.md)
 - [Aggregations](#aggregations)
 - [Joins and Lookups](#joins-and-lookups)
 - [Write Operations](#write-operations)
+- [Delete and Cleanup Operations](#delete-and-cleanup-operations)
 - [Variables and Templating](#variables-and-templating)
 - [Production Workflows](#production-workflows)
 
@@ -420,6 +421,212 @@ SELECT flow.write(
 );
 
 SELECT flow.register_pipeline('daily_event_summary');
+```
+
+---
+
+## Delete and Cleanup Operations
+
+### Delete Old Records Before Write
+
+```sql
+-- Maintain a rolling window of data
+SELECT flow.read_db_object('raw.orders');
+SELECT flow.where('status = ''COMPLETED''');
+SELECT flow.select('*');
+
+-- Delete records older than 90 days before inserting new ones
+SELECT flow.delete('staging.orders', 'order_date < CURRENT_DATE - 90');
+
+SELECT flow.write('staging.orders', 'insert');
+
+SELECT flow.register_pipeline('rolling_orders_load');
+```
+
+### Truncate for Full Refresh
+
+```sql
+-- Complete table replacement (fastest method)
+SELECT flow.read_db_object('raw.daily_snapshot');
+SELECT flow.where('snapshot_date = CURRENT_DATE');
+SELECT flow.select('*');
+
+-- Truncate is much faster than DELETE for removing all rows
+SELECT flow.delete('reports.daily_report', truncate_mode => true);
+
+SELECT flow.write('reports.daily_report', 'insert');
+
+SELECT flow.register_pipeline('refresh_daily_report');
+```
+
+**Note:** TRUNCATE is significantly faster than DELETE but:
+- Cannot have WHERE clauses
+- Resets auto-increment counters
+- May require special permissions
+- Cannot be used with foreign key constraints (unless CASCADE)
+
+### Delete After Write (Cleanup Pattern)
+
+```sql
+-- Process and then clean up source data
+SELECT flow.read_db_object('staging.raw_events');
+SELECT flow.where('processed = false');
+SELECT flow.select('event_id', 'event_type', 'event_data', 'created_at');
+
+-- Write processed events to target
+SELECT flow.write('processed.events', 'insert');
+
+-- Delete processed records after successful write
+SELECT flow.delete(
+    'staging.raw_events',
+    where_clause => 'processed = false',
+    execution_order => 'after'
+);
+
+SELECT flow.register_pipeline('process_and_cleanup_events');
+```
+
+### Multiple Delete Operations
+
+```sql
+-- Clean up multiple related tables
+SELECT flow.read_db_object('source.transactions');
+
+-- Delete old audit logs before processing
+SELECT flow.delete(
+    'audit.transaction_log',
+    'created_at < NOW() - INTERVAL ''30 days''',
+    step_name => 'Clean old audit logs'
+);
+
+-- Delete temporary processing records
+SELECT flow.delete(
+    'temp.processing_queue',
+    'status = ''COMPLETED'' AND updated_at < NOW() - INTERVAL ''1 day'''
+);
+
+-- Main write operation
+SELECT flow.write('target.transactions', 'upsert', ARRAY['transaction_id']);
+
+-- Clean up error logs after successful write
+SELECT flow.delete(
+    'temp.error_log',
+    'created_at < NOW() - INTERVAL ''7 days''',
+    execution_order => 'after',
+    step_name => 'Remove old error logs'
+);
+
+SELECT flow.register_pipeline('transaction_sync_with_cleanup');
+```
+
+### Conditional Delete with Complex WHERE
+
+```sql
+-- Remove specific records based on business logic
+SELECT flow.read_db_object('raw.orders');
+
+-- Delete cancelled or expired orders
+SELECT flow.delete(
+    'staging.orders',
+    where_clause => '(status = ''CANCELLED'' AND updated_at < CURRENT_DATE - 7) OR (status = ''EXPIRED'')',
+    step_name => 'Remove invalid orders'
+);
+
+SELECT flow.write('staging.orders', 'insert');
+
+SELECT flow.register_pipeline('orders_without_invalid');
+```
+
+### Delete with Variables
+
+```sql
+-- Delete based on runtime parameters
+SELECT flow.read_db_object('raw.regional_sales');
+
+-- Delete records for specific region using variable
+SELECT flow.delete('staging.sales', 'region = ''{{target_region}}''');
+
+SELECT flow.write('staging.sales', 'insert');
+
+SELECT flow.register_pipeline(
+    'region_sales_refresh',
+    'Refresh sales for specific region',
+    jsonb_build_object('target_region', 'Region code to refresh')
+);
+
+-- Execute with variable
+SELECT * FROM flow.run_pipeline(
+    'region_sales_refresh',
+    jsonb_build_object('target_region', 'US')
+);
+```
+
+### Archive and Delete Pattern
+
+```sql
+-- Move old data to archive before deleting
+SELECT flow.read_db_object('operational.transactions');
+SELECT flow.where('transaction_date < CURRENT_DATE - 365');
+SELECT flow.select('*');
+
+-- Write to archive first
+SELECT flow.write('archive.old_transactions', 'insert');
+
+-- Delete archived records after successful archive (execution_order => 'after')
+SELECT flow.delete(
+    'operational.transactions',
+    where_clause => 'transaction_date < CURRENT_DATE - 365',
+    execution_order => 'after',
+    step_name => 'Remove archived transactions'
+);
+
+SELECT flow.register_pipeline('archive_old_transactions');
+```
+
+### Delete All Records (Without Truncate)
+
+```sql
+-- Clear table completely using DELETE
+SELECT flow.read_db_object('source.new_data');
+
+-- Delete all records (useful when truncate restrictions apply)
+SELECT flow.delete('staging.import_table');
+
+SELECT flow.write('staging.import_table', 'insert');
+
+SELECT flow.register_pipeline('reload_staging_data');
+```
+
+**When to use DELETE vs TRUNCATE:**
+- Use **TRUNCATE** when:
+  - You want to remove ALL rows (fastest)
+  - Table has no foreign key constraints
+  - You want to reset identity/sequence columns
+  
+- Use **DELETE** when:
+  - You need a WHERE clause for conditional deletion
+  - Table has foreign key relationships
+  - You need the operation to be transactional and rollback-able
+  - You want to trigger row-level triggers
+
+### Incremental Load with Pre-Delete
+
+```sql
+-- Remove existing records before upserting
+SELECT flow.read_db_object('source.customer_updates');
+SELECT flow.select('customer_id', 'name', 'email', 'updated_at');
+
+-- Delete existing records for customers being updated
+-- Using a subquery to get the list of customers
+SELECT flow.delete(
+    'target.customers',
+    where_clause => 'customer_id IN (SELECT customer_id FROM source.customer_updates)'
+);
+
+-- Insert the new/updated records
+SELECT flow.write('target.customers', 'insert');
+
+SELECT flow.register_pipeline('customer_delta_load');
 ```
 
 ---

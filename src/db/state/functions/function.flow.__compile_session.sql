@@ -21,6 +21,9 @@ declare
     v_write_auto_create boolean;
     v_write_truncate   boolean;
     v_column_aliases   jsonb := '{}'::jsonb;  -- Tracks column alias -> source expression mapping
+    v_delete_before    text[] := array[]::text[];  -- DELETE/TRUNCATE statements to run before write
+    v_delete_after     text[] := array[]::text[];  -- DELETE/TRUNCATE statements to run after write
+    v_delete_sql       text;
 begin
     perform flow.__ensure_session_steps();
     perform flow.__assert_pipeline_started();
@@ -377,6 +380,33 @@ begin
                     end if;
                 end;
 
+            -- =====================
+            -- DELETE
+            -- =====================
+            when 'delete' then
+                declare
+                    v_target text := v_step.step_spec->>'target_table';
+                    v_where_clause text := v_step.step_spec->>'where_clause';
+                    v_execution_order text := coalesce(v_step.step_spec->>'execution_order', 'before');
+                    v_truncate boolean := coalesce((v_step.step_spec->>'truncate_mode')::boolean, false);
+                begin
+                    -- Build DELETE or TRUNCATE statement
+                    if v_truncate then
+                        v_delete_sql := format('TRUNCATE TABLE %s', v_target);
+                    elsif v_where_clause is not null then
+                        v_delete_sql := format('DELETE FROM %s WHERE %s', v_target, v_where_clause);
+                    else
+                        v_delete_sql := format('DELETE FROM %s', v_target);
+                    end if;
+                    
+                    -- Add to appropriate array based on execution_order
+                    if v_execution_order = 'before' then
+                        v_delete_before := v_delete_before || v_delete_sql;
+                    else
+                        v_delete_after := v_delete_after || v_delete_sql;
+                    end if;
+                end;
+
             -- =====================            -- WRITE
             -- =====================
             when 'write' then
@@ -486,6 +516,19 @@ begin
             v_write_auto_create,
             v_write_truncate
         );
+    end if;
+
+    -- =====================
+    -- ADD DELETE STATEMENTS
+    -- =====================
+    -- Prepend 'before' delete statements
+    if array_length(v_delete_before, 1) > 0 then
+        v_sql := array_to_string(v_delete_before, '; ' || E'\n') || '; ' || E'\n' || v_sql;
+    end if;
+    
+    -- Append 'after' delete statements
+    if array_length(v_delete_after, 1) > 0 then
+        v_sql := v_sql || '; ' || E'\n' || array_to_string(v_delete_after, '; ' || E'\n');
     end if;
 
     return v_sql;

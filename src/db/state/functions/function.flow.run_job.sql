@@ -36,6 +36,9 @@ begin
     
     raise notice '=================================================================';
     raise notice 'Starting job: %', p_job_name;
+    if p_variables is not null and p_variables != '{}'::jsonb then
+        raise notice 'Variables: %', p_variables::text;
+    end if;
     raise notice '=================================================================';
     
     -- Loop through job steps in order
@@ -122,7 +125,7 @@ begin
                     raise notice '=================================================================';
                     raise notice 'Job FAILED: % (stopped on error)', p_job_name;
                     raise notice '=================================================================';
-                    return;
+                    raise exception 'Job "%" failed at step %: %', p_job_name, v_step.step_order, v_error_message;
                 else
                     continue;
                 end if;
@@ -164,8 +167,8 @@ Each execution is recorded in flow.job_execution_log.
 
 Parameters:
   p_job_name      - Name of the job to execute
-  p_variables     - JSONB object with variables to pass to all pipelines
-  p_stop_on_error - Stop execution if any pipeline fails (default: true)
+  p_variables     - JSONB object with variables to pass to all pipelines (default: {})
+  p_stop_on_error - If true, throw exception on first failure; if false, continue to next pipeline (default: true)
 
 Returns table with:
 - step_order: Execution order
@@ -178,17 +181,17 @@ Returns table with:
 - error_message: Error if failed
 
 Examples:
-  -- Run a job
+  -- Run a job (throws exception on failure by default)
   SELECT * FROM flow.run_job('daily_etl');
   
   -- Run with variables
   SELECT * FROM flow.run_job(
       'monthly_report',
-      jsonb_build_object('report_date', '2025-01-01')
+      jsonb_build_object('report_date', '2025-01-01', 'region', 'US')
   );
   
-  -- Continue on error
-  SELECT * FROM flow.run_job('data_cleanup', '{}'::jsonb, false);
+  -- Continue on error (don't throw exception)
+  SELECT * FROM flow.run_job('data_cleanup', '{}'::jsonb, stop_on_error => false);
   
   -- View execution history
   SELECT 
